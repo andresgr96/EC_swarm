@@ -21,7 +21,7 @@ from utils.Fitnesses import Calculate_fitness_size
 def main():
     n_input = 9
     n_output = 2
-    genotype = thymio_genotype("hNN", n_input, n_output)
+    genotype = thymio_genotype("RNN", n_input, n_output)
     genotype['controller']["params"]['torch'] = False
 
     simulation_time = 600
@@ -29,7 +29,7 @@ def main():
     n_runs = 10  # runs
     n_generations = 100  # generations
     pop_size = 30  # number of individuals
-    swarm_size = 1
+    swarm_size = 20
     reps = 3  # repetitions per individual
     arenas = [30]
 

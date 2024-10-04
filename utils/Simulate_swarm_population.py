@@ -37,6 +37,7 @@ class __EnvSet(TypedDict):
     spawn_radius: float
     objectives: List[str]
     record_video: bool
+    env_perturb: bool
     save_sim_state: bool
     save_full_fitness: bool
     random_start: bool
@@ -49,6 +50,7 @@ EnvSettings: __EnvSet = {
     'objectives': ['gradient'],
     'fitness_size': 1,
     'record_video': False,
+    'env_perturb': False,
     'save_sim_state': False,
     'save_full_fitness': False,
     'random_start': True
@@ -111,6 +113,7 @@ def simulate_swarm_population(life_timeout: float, individuals: List[List[Indivi
     # Set up the env grid
     num_envs = len(individuals)
     arena = env_params['arena_type']
+    arena2 = "circle_corner_30x30"
     spacing = int(re.findall('\d+', arena)[-1])
     env_lower = gymapi.Vec3(0.0, 0.0, 0.0)
     env_upper = gymapi.Vec3(spacing, spacing, spacing)
@@ -120,9 +123,11 @@ def simulate_swarm_population(life_timeout: float, individuals: List[List[Indivi
     env_list = []
     robot_handles_list = []
     fitness_list = []
+    fitness_list2 = []
     fitness_full = []
     sim_state = []
     sensor_list = []
+    sensor_list2 = []
     num_robots = len(individuals[0])
     controller_list = []
     controller_types_list = []
@@ -165,11 +170,11 @@ def simulate_swarm_population(life_timeout: float, individuals: List[List[Indivi
                 ix = (arena_center + r_distance * radius_spawn * (np.sin(iangle)))
             # linear
             elif arena.split('_')[:-1] == ['linear'] or arena.split('_')[:-1] == ['bimodal']:
-                iy = arena_center + r_distance
-                ix = arena_center + 2 * r_distance * radius_spawn * (rng.random() - 0.5)
+                iy = arena_center + 2 * r_distance * radius_spawn * (rng.random() - 0.5)
+                ix = arena_center + r_distance
             elif arena.split('_')[:-1] == ['banana']:
-                iy = arena_center + rng.random() * 2 * r_distance
-                ix = arena_center + rng.random() * 2 * r_distance
+                iy = arena_center + 2 * r_distance * radius_spawn * (rng.random() - 0.5)
+                ix = arena_center + 2 * r_distance * radius_spawn * (rng.random() - 0.5)
 
             a_x = ix + (init_area /2)
             b_x = ix - (init_area /2)
@@ -183,8 +188,8 @@ def simulate_swarm_population(life_timeout: float, individuals: List[List[Indivi
                 x_diff = ixs.reshape((1, num_robots)) - ixs.reshape((num_robots, 1))
                 y_diff = iys.reshape((1, num_robots)) - iys.reshape((num_robots, 1))
                 dist = np.hypot(x_diff, y_diff)
-                init_failure_1 = (dist[np.triu_indices(num_robots, k=1)] < 0.4).any()
-
+                init_failure_1 = (dist[np.triu_indices(num_robots, k=1)] < 0.2).any()
+            print("Found valid initial state!")
             ihs = 6.28 * rng.random(num_robots)
 
             pose = gymapi.Transform()
@@ -258,7 +263,11 @@ def simulate_swarm_population(life_timeout: float, individuals: List[List[Indivi
         fitness_list.append(FitnessCalculator(individual, initial_positions, desired_movement,
                                               arena=arena,
                                               objectives=env_params['objectives']))
+        fitness_list2.append(FitnessCalculator(individual, initial_positions, desired_movement,
+                                              arena=arena2,
+                                              objectives=env_params['objectives']))
         sensor_list.append(Sensors(controller_types_list[i_env], arena=arena))
+        sensor_list2.append(Sensors(controller_types_list[i_env], arena=arena2))
 
     # %% Create function
     def update_robot(env, controllers, robot_handles, states):
@@ -286,6 +295,7 @@ def simulate_swarm_population(life_timeout: float, individuals: List[List[Indivi
     viewer = None
     plot = False
     record_video = env_params['record_video']
+    env_perturb = env_params['env_perturb']
     save_sim_state = env_params['save_sim_state']
     save_full_fitness = env_params['save_full_fitness']
     if not headless:
@@ -307,6 +317,7 @@ def simulate_swarm_population(life_timeout: float, individuals: List[List[Indivi
 
         if len(individuals) == 1:
             plotter = swarm_plotter(arena, colors)  # Plotter init
+            plotter2 = swarm_plotter(arena2, colors)  # Plotter init
             plot = True
 
             light_options = gymapi.AssetOptions()
@@ -340,28 +351,45 @@ def simulate_swarm_population(life_timeout: float, individuals: List[List[Indivi
                 controller = controller_list[i_env]
                 # Update positions and headings of all robots
                 headings, positions[0], positions[1] = get_pos_and_headings(env, robot_handles)
-                sensor_list[i_env].calculate_states(positions, headings)
-                states = sensor_list[i_env].get_current_state()
+                if frame >= 300 and env_perturb:
+                    sensor_list2[i_env].calculate_states(positions, headings)
+                    states = sensor_list2[i_env].get_current_state()
+                else:
+                    sensor_list[i_env].calculate_states(positions, headings)
+                    states = sensor_list[i_env].get_current_state()
                 update_robot(env, controller, robot_handles, states)
 
                 fitness_current[:, i_env] = fitness_list[i_env].obtain_fitnesses(positions, headings) / timestep
+                fitness_list2[i_env].obtain_fitnesses(positions, headings) / timestep
                 if save_full_fitness:
-                    fitness_full.append(copy.deepcopy(fitness_current))
+                    if frame >= 300 and env_perturb:
+                        sensor_list2[i_env].calculate_states(positions, headings)
+                        curr_val = copy.deepcopy(np.sum(fitness_list2[i_env].grad_vals) / fitness_list2[i_env].num_robots / 255.0)
+                    else:
+                        curr_val = copy.deepcopy(np.sum(fitness_list[i_env].grad_vals) / fitness_list[i_env].num_robots / 255.0)
+                    fitness_full.append(curr_val)
+
                     if not t < life_timeout:
                         np.save(f'./results/fitness_full.npy', np.array(fitness_full).squeeze())
                 if save_sim_state:
                     sim_state.append(copy.deepcopy((positions, headings)))
                     if not t < life_timeout:
-                        np.save(f'./results/sim_state.npy')
+                        np.save(f'./results/sim_state.npy', np.array(sim_state))
 
             if plot:
                 if record_video:
                     if (gym.get_sim_time(sim) % 1) < 0.0005:
-                        plotter.plot_swarm_quiver(positions, headings, frame)
+
+                        if frame >= 300 and env_perturb:
+                            plotter2.plot_swarm_quiver(positions, headings, frame)
+                        else:
+                            plotter.plot_swarm_quiver(positions, headings, frame)
+
                         gym.step_graphics(sim)
                         gym.draw_viewer(viewer, sim, False)
                         gym.write_viewer_image_to_file(viewer, f'./results/images/viewer/{frame}.png')
                         frame += 1
+
                 else:
                     plotter.plot_swarm_quiver(positions, headings)
             start = gym.get_sim_time(sim)

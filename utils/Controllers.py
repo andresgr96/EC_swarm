@@ -1,12 +1,20 @@
+import copy
 import time
 from typing import List
 
 import numpy
 import numpy as np
 import torch
+from agilerl.algorithms.maddpg import MADDPG
 from torch import nn
+# from pettingzoo.mpe import simple_speaker_listener_v4
+# from tqdm import trange
+#
+# from agilerl.components.multi_agent_replay_buffer import MultiAgentReplayBuffer
+# from agilerl.wrappers.pettingzoo_wrappers import PettingZooVectorizationParallelWrapper
 
-from .graph_network.GCN_layer import GCNLayerNumpy
+
+from utils.graph_network.GCN_layer import GCNLayerNumpy
 
 torch.set_grad_enabled(False)
 rng = numpy.random.default_rng()
@@ -104,6 +112,47 @@ class NNController(Controller):
     def __init__(self, n_states, n_actions, torch_=True):
         super().__init__(n_states, n_actions)
         self.controller_type = "NN"
+        if torch_:
+            self.model = NeuralNetwork(n_states, n_states, n_actions)
+        else:
+            self.model = NumpyNetwork(n_states, n_states, n_actions)
+
+    def geno2pheno(self, genotype: np.array):
+        self.model.set_weights(genotype)
+
+    def map_state(self, min_from, max_from, min_to, max_to, state_portion):
+        return min_to + np.multiply((max_to - min_to), np.divide((state_portion - min_from), (max_from - min_from)))
+
+    def velocity_commands(self, state: np.ndarray) -> np.ndarray:
+        """
+        Given a state, give an appropriate action
+
+        :param <np.array> state: A single observation of the current state, dimension is (state_dim)
+        :return: <np.array> action: A vector of motor inputs
+        """
+
+        assert (len(state) == self.n_input), "State does not correspond with expected input size"
+        state[:4] = self.map_state(0, 2, -1, 1, state[:4])
+        state[4:8] = self.map_state(-np.pi, np.pi, -1, 1, state[4:8])  # Assumed distance sensing range is 2.0 meters. If not, check!
+        state[-1] = self.map_state(0, 255.0, -1, 1, state[-1])  # Gradient value, [0, 255]
+
+        action = self.model.forward(state)
+        control_input = action * np.array([self.umax_const, self.wmax])
+        return control_input
+
+    def save_geno(self, path: str):
+        if self.model.reservoir:
+            np.save(path + "/reservoir", [self.model.lin1, self.model.lin2, self.model.output], allow_pickle=True)
+
+    def load_geno(self, path: str):
+        if self.model.reservoir:
+            self.model.lin1, self.model.lin2, self.model.output = np.load(path + "/reservoir.npy", allow_pickle=True)
+
+
+class recurrentNNController(Controller):
+    def __init__(self, n_states, n_actions, torch_=True):
+        super().__init__(n_states, n_actions)
+        self.controller_type = "RNN"
         if torch_:
             self.model = NeuralNetwork(n_states, n_states, n_actions)
         else:
@@ -262,6 +311,8 @@ class hebbianNNController(Controller):
     def __init__(self, n_states, n_actions):
         super().__init__(n_states, n_actions)
         self.controller_type = "hNN"
+        self.dir = './results'
+
         self.weights_l1 = np.random.normal(0, 0.1, (n_states, n_states))
         self.weights_l2 = np.random.normal(0, 0.1, (n_states, n_states))
         self.weights_out = np.random.normal(0, 0.1, (n_actions, n_states))
@@ -272,10 +323,10 @@ class hebbianNNController(Controller):
         self.C = np.random.normal(0, 0.1, n_states*(n_actions+2*n_states))
         self.D = np.random.normal(0, 0.1, n_states*(n_actions+2*n_states))
 
-        self.update_n = 0
-        self.update_freq = 10
-        self.refract_n = 0
-        self.current_controller = None
+        self.log_weights = False
+        self.l1_log = [copy.deepcopy(self.weights_l1)]
+        self.l2_log = [copy.deepcopy(self.weights_l2)]
+        self.out_log = [copy.deepcopy(self.weights_out)]
 
     def map_state(self, min_from, max_from, min_to, max_to, state_portion):
         return min_to + np.multiply((max_to - min_to), np.divide((state_portion - min_from), (max_from - min_from)))
@@ -294,27 +345,34 @@ class hebbianNNController(Controller):
                                     state[4:8])  # Assumed distance sensing range is 2.0 meters. If not, check!
         state[-1] = self.map_state(0, 255.0, -1, 1, state[-1])  # Gradient value, [0, 255]
 
+        # if len(self.l1_log) > 3000:
+        #     state[-1] = -1 + (len(self.l1_log)-3000)/1500
+
         x1 = np.tanh(np.dot(self.weights_l1, state))
         x2 = np.tanh(np.dot(self.weights_l2, x1))
         out = np.tanh(np.dot(self.weights_out, x2))
 
-        if (self.update_n % self.update_freq) == 0:
-            pre_synaptic = np.hstack((np.tile(state, x1.size),
-                                      np.tile(x1, x2.size),
-                                      np.tile(x2, out.size)))
-            pos_synaptic = np.hstack((x1, x2, out)).repeat(state.size)
+        pre_synaptic = np.hstack((np.tile(state, x1.size),
+                                  np.tile(x1, x2.size),
+                                  np.tile(x2, out.size)))
+        pos_synaptic = np.hstack((x1, x2, out)).repeat(state.size)
 
-            weights_delta = self.lr*(self.A*pre_synaptic*pos_synaptic +
-                                     self.B*pre_synaptic +
-                                     self.C*pos_synaptic +
-                                     self.D)
+        weights_delta = self.lr*(self.A*pre_synaptic*pos_synaptic +
+                                 self.B*pre_synaptic +
+                                 self.C*pos_synaptic +
+                                 self.D)
 
-            self.weights_l1 += weights_delta[:self.weights_l1.size].reshape(self.weights_l1.shape)
-            self.weights_l2 += weights_delta[self.weights_l1.size:-self.weights_out.size].reshape(self.weights_l2.shape)
-            self.weights_out += weights_delta[-self.weights_out.size:].reshape(self.weights_out.shape)
-            self.refract_n = 0
+        self.weights_l1 += weights_delta[:self.weights_l1.size].reshape(self.weights_l1.shape)
+        self.weights_l2 += weights_delta[self.weights_l1.size:-self.weights_out.size].reshape(self.weights_l2.shape)
+        self.weights_out += weights_delta[-self.weights_out.size:].reshape(self.weights_out.shape)
 
-        self.refract_n += 1
+        if self.log_weights:
+            self.l1_log.append(copy.deepcopy(self.weights_l1))
+            self.l2_log.append(copy.deepcopy(self.weights_l2))
+            self.out_log.append(copy.deepcopy(self.weights_out))
+            if len(self.l1_log) == 6000:
+                np.save(f"{self.dir}/logs_{np.random.randint(1e5)+100}", [self.l1_log,self.l2_log,self.out_log])
+
         control_input = out * np.array([self.umax_const, self.wmax])
         return control_input
 
@@ -556,3 +614,35 @@ class ActiveElastic_omni(Controller):
         self.K1 = genotype[2]
         self.K2 = genotype[3]
         return
+
+
+class DDPG(Controller):
+    def __init__(self, n_states, n_actions, n_agents: int, curr_agent_id: int):
+        super().__init__(n_states, n_actions)
+        self.controller_type = "ddpg"
+
+        self.NET_CONFIG = {
+            'arch': 'mlp',  # Network architecture
+            'h_size': [32, 32]  # Network hidden size
+        }
+        self.agent = MADDPG(state_dims=[(n_states,1)]*n_agents,
+               action_dims=[n_actions]*n_agents,
+               one_hot=False,
+               n_agents=n_agents,
+               agent_ids=[str(agent_id) for agent_id in range(n_agents)],
+               max_action=[[1]*n_actions]*n_agents,
+               min_action=[[0]*n_actions]*n_agents,
+               discrete_actions=False,
+               net_config=self.NET_CONFIG)   # Create MADDPG agent
+
+        self.masks = np.eye(n_agents)
+
+        self.info = {'agent_mask': agent_mask, 'env_defined_actions': env_defined_actions}
+
+    def velocity_commands(self, state: np.array) -> np.array:
+        actions = self.agent.getAction(
+            states=state,
+            agent_mask=self.info['agent_mask'],
+            env_defined_actions=self.info['env_defined_actions'],
+        )
+        return actions[0]

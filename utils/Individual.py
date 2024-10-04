@@ -66,6 +66,8 @@ class Individual:
                 controller = Controllers.NNController(params['input_space'], params['output_space'], params['torch'])
         elif controller_type == 'aNN':
             controller = Controllers.adaptiveNNController(params['input_space'], params['output_space'])
+        elif controller_type == 'RNN':
+            controller = Controllers.recurrentNNController(params['input_space'], params['output_space'])
         elif controller_type == "GNN":
             controller = Controllers.GNNController(params['input_space'], params['output_space'])
         elif controller_type == 'hNN':

@@ -29,7 +29,7 @@ def main():
     n_runs = 10  # runs
     n_generations = 100  # generations
     pop_size = 30  # number of individuals
-    swarm_size = 1
+    swarm_size = 20
     reps = 3  # repetitions per individual
     arenas = [30]
 
