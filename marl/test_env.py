@@ -21,15 +21,15 @@ try:
             [np.random.rand(2) for _ in range(len(env.robot_handles_list[i_env]))]
             for i_env in range(env.n_envs)
         ]
-        print("Number of environments:", env.n_envs)
-        print("Robot handles list shape:", [len(handles) for handles in env.robot_handles_list])
-        print("Actions shape:", len(actions), [len(action) for action in actions])
+        # print("Number of environments:", env.n_envs)
+        # print("Robot handles list shape:", [len(handles) for handles in env.robot_handles_list])
+        # print("Actions shape:", len(actions), [len(action) for action in actions])
         
         # Step the environment
         obs, rewards, dones, infos = env.step(actions)
         
         # Print rewards at each step
-        print(f"Step {step + 1}: Rewards = {rewards}")
+        print(f"Step {step + 1}: Obs = {obs}")
 finally:
     # Ensure the environment is properly closed
     env.close()

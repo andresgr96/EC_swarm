@@ -61,6 +61,35 @@ class HebbianEnv(gym.Env):
     def create_individuals(self):
         # Create example individuals, replace this with your setup
         return [[Individual(thymio_genotype("hNN", 9, 2), i) for i in range(20)]]
+    
+    def get_pos_and_headings(self, env, robot_handles):
+        """
+        Get the positions and headings of all robots in the specified environment.
+
+        :param env: The Isaac Gym environment instance.
+        :param robot_handles: List of robot handles in the environment.
+        :return: headings, positions_x, positions_y
+        """
+        num_robots = len(robot_handles)
+        headings = np.zeros((num_robots,))
+        positions_x = np.zeros_like(headings)
+        positions_y = np.zeros_like(headings)
+
+        # Iterate over each robot to get its position and heading
+        for i in range(num_robots):
+            # Get the rigid body state of the robot
+            body_pose = self.gym.get_actor_rigid_body_states(env, robot_handles[i], gymapi.STATE_POS)["pose"][0]
+
+            # Extract the quaternion for orientation and convert it to a rotation matrix
+            body_angle_mat = np.array(body_pose[1].tolist())
+            r = R.from_quat(body_angle_mat)
+            headings[i] = r.as_euler('zyx')[0]  # Extract the yaw angle
+
+            # Extract the x and y positions
+            positions_x[i] = body_pose[0][0]
+            positions_y[i] = body_pose[0][1]
+
+        return headings, positions_x, positions_y
 
     def initialize_simulator(self):
 
@@ -246,17 +275,32 @@ class HebbianEnv(gym.Env):
             self.gym.draw_viewer(self.viewer, self.gym, False)
         else:
             raise RuntimeError("Viewer is not initialized. Set headless=False to use render.")
-
+        
     def get_obs(self):
-        # Collect observations for each agent
         obs = []
+
+        # Iterate over each environment to collect observations
         for i_env, env in enumerate(self.env_list):
-            env_obs = []
-            for i_robot in range(len(self.robot_handles_list[i_env])):
-                # Example observation: placeholder values
-                env_obs.append([0.0, 0.0, 0.0])
-            obs.append(env_obs)
+            # Get the robot handles for this environment
+            robot_handles = self.robot_handles_list[i_env]
+
+            # Get positions and headings for all robots in this environment
+            headings, positions_x, positions_y = self.get_pos_and_headings(env, robot_handles)
+            positions = np.array([positions_x, positions_y])
+
+            # Use the appropriate sensor list to calculate the states
+            if self.life_timeout >= 300 and self.env_settings['env_perturb']:
+                self.sensor_list2[i_env].calculate_states(positions, headings)
+                states = self.sensor_list2[i_env].get_current_state()
+            else:
+                self.sensor_list[i_env].calculate_states(positions, headings)
+                states = self.sensor_list[i_env].get_current_state()
+
+            # Append the states as observations for this environment
+            obs.append(states)
+
         return obs
+
 
     def calculate_rewards(self):
         # Placeholder rewards
