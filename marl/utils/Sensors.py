@@ -3,6 +3,7 @@ from typing import List
 import numpy as np
 import scipy.io as sio
 import re
+import os
 
 
 class Sensors:
@@ -14,7 +15,12 @@ class Sensors:
         for sensor in self.sensor_list:
             self.robot_sensor_map.append([i for i, x in enumerate(sensor_list) if x == sensor])
         self.states = [np.empty(0)] * len(sensor_list)
-        self.map = sio.loadmat(f'./utils/Gradient Maps/{arena}.mat')
+
+        # Absolute path to the 'Gradient Maps' directory
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        gradient_map_path = os.path.join(current_dir, "Gradient Maps", f"{arena}.mat")
+
+        self.map = sio.loadmat(gradient_map_path)
         self.map = self.map['I']
         self.size_x = int(re.findall('\d+', arena)[-1])
         self.size_y = int(re.findall('\d+', arena)[-1])

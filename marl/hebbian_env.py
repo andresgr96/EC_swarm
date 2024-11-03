@@ -1,8 +1,6 @@
 import copy
 import re
-import time
-from multiprocessing import shared_memory, Process
-from typing import AnyStr, TypedDict, List
+from typing import List
 from isaacgym import gymapi
 from isaacgym import gymutil
 from scipy.spatial.transform import Rotation as R
@@ -13,7 +11,6 @@ from numpy.random import default_rng
 from utils.Fitnesses import FitnessCalculator
 from utils.Individual import Individual, thymio_genotype
 from utils.Sensors import Sensors
-from utils.plot_swarm import swarm_plotter
 from utils.Simulate_swarm_population import EnvSettings
 
 class HebbianEnv(gym.Env):
@@ -30,21 +27,50 @@ class HebbianEnv(gym.Env):
         self.env_list = []
         self.robot_handles_list = []
         self.controller_list = []
+        self.fitness_list = []
+        self.fitness_list2 = []
+        self.sensor_list = []
+        self.sensor_list2 = []
 
         # Initialize Isaac Gym and environments
         self.initialize_simulator()
 
-    def calc_vel_targets(self, controller, states):
-        velocity_target = controller.velocity_commands(np.array(states))
-        n_l = ((velocity_target[0] + 0.025) - (velocity_target[1] / 2) * 0.085) / 0.021
-        n_r = ((velocity_target[0] + 0.025) + (velocity_target[1] / 2) * 0.085) / 0.021
-        return [n_l, n_r]
+    def calc_vel_targets(self, actions):
+        """
+        Vectorized conversion of the actions into velocity commands suitable for the robots.
+        :param actions: List of actions, where each action is a [linear_velocity, angular_velocity] pair
+        :return: List of transformed actions as [n_l, n_r] pairs
+        """
+        # Convert actions to a NumPy array if they aren't already
+        actions_array = np.array(actions)
+
+        # Extract linear and angular velocities
+        linear_velocities = actions_array[:, 0]
+        angular_velocities = actions_array[:, 1]
+
+        # Perform the vectorized computation for n_l and n_r
+        n_l = ((linear_velocities + 0.025) - (angular_velocities / 2) * 0.085) / 0.021
+        n_r = ((linear_velocities + 0.025) + (angular_velocities / 2) * 0.085) / 0.021
+
+        # Stack the results to get a list of [n_l, n_r] pairs
+        transformed_actions = np.column_stack((n_l, n_r))
+
+        return transformed_actions
+
 
     def create_individuals(self):
         # Create example individuals, replace this with your setup
         return [[Individual(thymio_genotype("hNN", 9, 2), i) for i in range(20)]]
 
     def initialize_simulator(self):
+
+        self.env_list.clear()
+        self.robot_handles_list.clear()
+        self.controller_list.clear()
+        self.fitness_list.clear()
+        self.fitness_list2.clear()
+        self.sensor_list.clear()
+        self.sensor_list2.clear()
         # Parse arguments
         args = gymutil.parse_arguments(description="Loading and testing")
 
@@ -89,10 +115,6 @@ class HebbianEnv(gym.Env):
         env_upper = gymapi.Vec3(spacing, spacing, spacing)
 
         # Initialize environment and robot handles
-        self.env_list = []
-        self.robot_handles_list = []
-        self.controller_list = []
-
         print(f"Creating {num_envs} {arena} environments")
         for i_env in range(num_envs):
             individual = self.individuals[i_env]
@@ -106,7 +128,7 @@ class HebbianEnv(gym.Env):
 
             # Initialize robots
             num_robots = len(individual)
-            initial_positions = np.zeros((2, num_robots))  # Allocation to save initial positions
+            initial_positions = np.zeros((2, num_robots))
             rng = default_rng()
 
             if self.env_settings['random_start']:
@@ -142,7 +164,6 @@ class HebbianEnv(gym.Env):
                     robot_handle = self.gym.create_actor(env, robot_asset, pose, f"robot_{i}", 0, 0)
                     robot_handles.append(robot_handle)
             else:
-                # Place robots in a grid
                 distance = 0.5
                 rows = int(np.ceil(np.sqrt(num_robots)))
                 pose = gymapi.Transform()
@@ -171,6 +192,14 @@ class HebbianEnv(gym.Env):
                 props['damping'].fill(0.025)
                 self.gym.set_actor_dof_properties(env, handle, props)
 
+            # Add Fitness and Sensor objects
+            self.fitness_list.append(FitnessCalculator(individual, initial_positions, 10, arena=arena,
+                                                       objectives=self.env_settings['objectives']))
+            self.fitness_list2.append(FitnessCalculator(individual, initial_positions, 10, arena="circle_corner_30x30",
+                                                        objectives=self.env_settings['objectives']))
+            self.sensor_list.append(Sensors([controller.controller_type for controller in controllers], arena=arena))
+            self.sensor_list2.append(Sensors([controller.controller_type for controller in controllers], arena="circle_corner_30x30"))
+
             print(f"Initialized {num_robots} robots in environment {i_env}")
 
         # Create viewer if headless mode is off
@@ -188,13 +217,17 @@ class HebbianEnv(gym.Env):
         return initial_obs
 
     def step(self, actions):
+        # Transform the actions 
+        transformed_actions = self.calc_vel_targets(actions)
+
         # Apply actions to robots
         for i_env, env in enumerate(self.env_list):
-            for i_robot, action in enumerate(actions[i_env]):
-                velocity_command = self.calc_vel_targets(self.controller_list[i_env][i_robot], action)
-                self.gym.set_actor_dof_velocity_targets(env, self.robot_handles_list[i_env][i_robot], velocity_command)
+            for i_robot, velocity_command in enumerate(transformed_actions):
+                self.gym.set_actor_dof_velocity_targets(
+                    env, self.robot_handles_list[i_env][i_robot], velocity_command.astype(np.float32)
+                )
 
-        # Step simulation
+        # Step the simulation
         self.gym.simulate(self.sim)
         self.gym.fetch_results(self.sim, True)
 
@@ -205,6 +238,7 @@ class HebbianEnv(gym.Env):
         infos = self.collect_infos()
 
         return obs, rewards, dones, infos
+
 
     def render(self, mode='human'):
         if self.viewer is not None:

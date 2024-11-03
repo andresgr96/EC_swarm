@@ -4,6 +4,7 @@ import numpy as np
 from copy import deepcopy
 import re
 import scipy.io as sio
+import os
 
 from utils.Individual import Individual
 
@@ -35,7 +36,12 @@ class FitnessCalculator:
         for member in self.unique_individuals:
             self.sub_group_map.append([i for i, x in enumerate(swarm) if x == member])
 
-        self.map = sio.loadmat(f'./utils/Gradient Maps/{arena}.mat')
+
+        # Absolute path to the 'Gradient Maps' directory
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        gradient_map_path = os.path.join(current_dir, "Gradient Maps", f"{arena}.mat")
+
+        self.map = sio.loadmat(gradient_map_path)
         self.map = self.map['I']
         self.size_x = int(re.findall('\d+', arena)[-1])
         self.size_y = int(re.findall('\d+', arena)[-1])

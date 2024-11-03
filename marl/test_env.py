@@ -14,8 +14,16 @@ print("Starting simulation...")
 
 try:
     for step in range(num_steps):
-        # Example actions: using random actions for demonstration
-        actions = [[np.random.rand(9) for _ in range(len(env.robot_handles_list[0]))]]
+
+        # Create actions for each environment and robot
+        # Each action should be a list of two elements: [velocity_left, velocity_right]
+        actions = [
+            [np.random.rand(2) for _ in range(len(env.robot_handles_list[i_env]))]
+            for i_env in range(env.n_envs)
+        ]
+        print("Number of environments:", env.n_envs)
+        print("Robot handles list shape:", [len(handles) for handles in env.robot_handles_list])
+        print("Actions shape:", len(actions), [len(action) for action in actions])
         
         # Step the environment
         obs, rewards, dones, infos = env.step(actions)
