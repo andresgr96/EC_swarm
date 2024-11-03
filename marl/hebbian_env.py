@@ -20,7 +20,7 @@ class HebbianEnv(gym.Env):
         self.n_envs = n_envs
         self.life_timeout = 600
         self.headless = headless
-        self.individuals = self.create_individuals()
+        self.individuals = self.create_individuals()  # this needs to be updated for n envs
         self.gym = gymapi.acquire_gym()
         self.sim = None
         self.viewer = None
@@ -59,8 +59,14 @@ class HebbianEnv(gym.Env):
 
 
     def create_individuals(self):
-        # Create example individuals, replace this with your setup
-        return [[Individual(thymio_genotype("hNN", 9, 2), i) for i in range(20)]]
+        # Create a list of individuals for each environment
+        individuals = []
+        for _ in range(self.n_envs):
+            # Each environment gets its own list of 20 individuals
+            env_individuals = [Individual(thymio_genotype("hNN", 9, 2), i) for i in range(20)]
+            individuals.append(env_individuals)
+        return individuals
+
     
     def get_pos_and_headings(self, env, robot_handles):
         """
@@ -303,11 +309,38 @@ class HebbianEnv(gym.Env):
 
 
     def calculate_rewards(self):
-        # Placeholder rewards
         rewards = []
+
+        # Iterate over each environment
         for i_env in range(self.n_envs):
-            rewards.append([0.0] * len(self.robot_handles_list[i_env]))
+            # Get the robot handles for this environment
+            robot_handles = self.robot_handles_list[i_env]
+
+            # Get positions and headings for all robots in this environment
+            headings, positions_x, positions_y = self.get_pos_and_headings(self.env_list[i_env], robot_handles)
+            positions = np.array([positions_x, positions_y])
+
+            # Use the appropriate sensor list to calculate the states
+            if self.life_timeout >= 300 and self.env_settings['env_perturb']:
+                self.sensor_list2[i_env].calculate_states(positions, headings)
+                states = self.sensor_list2[i_env].get_current_state()
+            else:
+                self.sensor_list[i_env].calculate_states(positions, headings)
+                states = self.sensor_list[i_env].get_current_state()
+
+            # Convert the states to a NumPy array for easier slicing
+            states_array = np.array(states)
+
+            # Extract the gradient sensor outputs (light intensity values) from the states
+            # Assuming grad_sensor_outputs are the last part of the state vector
+            grad_sensor_outputs = states_array[:, -1]  # Adjust indexing if necessary
+
+            # Use the light intensity values as rewards for each robot
+            rewards.append(grad_sensor_outputs.tolist())
+
         return rewards
+
+
 
     def check_termination(self):
         # Placeholder termination status
