@@ -97,6 +97,9 @@ class HebbianEnv(gym.Env):
         self.fitness_list2.clear()
         self.sensor_list.clear()
         self.sensor_list2.clear()
+        self.current_rewards = [[] for _ in range(self.n_envs)]
+        self.current_light_values = [[] for _ in range(self.n_envs)]
+
         # Parse arguments
         args = gymutil.parse_arguments(description="Loading and testing")
 
@@ -235,9 +238,67 @@ class HebbianEnv(gym.Env):
 
 
     def reset(self):
-        # Close the current simulator to avoid multiple instances, we should instead reposition the robots
-        self.close()
-        self.initialize_simulator()
+        # Reset robot positions without destroying the simulator
+        rng = default_rng()
+        num_robots = self.n_individuals
+        arena_length = int(re.findall(r'\d+', self.env_settings['arena_type'])[-1])
+        init_area = arena_length / 10
+        arena_center = arena_length / 2
+
+        for i_env, env in enumerate(self.env_list):
+            if self.env_settings['random_start']:
+                init_failure = True
+
+                # Generate initial positions until they are valid
+                while init_failure:
+                    ixs = init_area * (2 * rng.random(num_robots) - 1) + arena_center
+                    iys = init_area * (2 * rng.random(num_robots) - 1) + arena_center
+                    x_diff = np.subtract.outer(ixs, ixs)
+                    y_diff = np.subtract.outer(iys, iys)
+                    distances = np.hypot(x_diff, y_diff)
+                    init_failure = np.any(distances[np.triu_indices(num_robots, k=1)] < 0.2)
+
+                ihs = 2 * np.pi * rng.random(num_robots)
+            else:
+                distance = 0.5
+                rows = int(np.ceil(np.sqrt(num_robots)))
+                ixs = [(i % rows) * distance - (rows - 1) * distance / 2 for i in range(num_robots)]
+                iys = [(i // rows) * distance - (rows - 1) * distance / 2 for i in range(num_robots)]
+                ihs = [0.0] * num_robots  # All robots face the same direction in the grid
+
+            # Create a full array for the new states
+            new_states = np.zeros(num_robots, dtype=gymapi.RigidBodyState.dtype)
+            
+            # Set new positions and orientations for each robot
+            for i in range(num_robots):
+                new_states[i]['pose']['p']['x'] = ixs[i]
+                new_states[i]['pose']['p']['y'] = iys[i]
+                new_states[i]['pose']['p']['z'] = 0.033
+                rotation = R.from_euler('zyx', [ihs[i], 0.0, 0.0]).as_quat()
+                new_states[i]['pose']['r']['x'] = rotation[0]
+                new_states[i]['pose']['r']['y'] = rotation[1]
+                new_states[i]['pose']['r']['z'] = rotation[2]
+                new_states[i]['pose']['r']['w'] = rotation[3]
+                new_states[i]['vel']['linear']['x'] = 0.0
+                new_states[i]['vel']['linear']['y'] = 0.0
+                new_states[i]['vel']['linear']['z'] = 0.0
+                new_states[i]['vel']['angular']['x'] = 0.0
+                new_states[i]['vel']['angular']['y'] = 0.0
+                new_states[i]['vel']['angular']['z'] = 0.0
+
+            # Set all actor rigid body states in one call
+            for i, handle in enumerate(self.robot_handles_list[i_env]):
+                self.gym.set_actor_rigid_body_states(env, handle, new_states[i], gymapi.STATE_ALL)
+
+        # Simulate once to apply the new states
+        self.gym.simulate(self.sim)
+        self.gym.fetch_results(self.sim, True)
+
+        # Reset fitness and sensor lists
+        self.current_rewards = [[] for _ in range(self.n_envs)]
+        self.current_light_values = [[] for _ in range(self.n_envs)]
+
+        # Reset observations
         initial_obs = self.get_obs()
         return initial_obs
 
@@ -349,6 +410,7 @@ class HebbianEnv(gym.Env):
         return infos
 
     def close(self):
+        print(f"Environment Killed")
         if self.viewer is not None:
             self.gym.destroy_viewer(self.viewer)
             self.viewer = None

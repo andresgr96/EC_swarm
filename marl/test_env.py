@@ -1,5 +1,5 @@
 import numpy as np
-from marl.hebbian_env_test import HebbianEnv  # Make sure this is the correct import path for HebbianEnv
+from hebbian_env_test import HebbianEnv
 
 # Initialize the environment
 env = HebbianEnv(n_envs=5, n_individuals=10,  headless=False)  # Set headless to False if you want to render
@@ -11,14 +11,14 @@ obs = env.reset()
 num_steps = 1000000
 
 print("Starting simulation...")
-
+i = 0
 try:
     for step in range(num_steps):
 
         # Create actions for each environment and robot
         # Each action should be a list of two elements: [velocity_left, velocity_right]
         actions = [
-            [[0.5, 1] for _ in range(len(env.robot_handles_list[i_env]))]
+            [np.random.random(2) for _ in range(len(env.robot_handles_list[i_env]))]
             for i_env in range(env.n_envs)
         ]
         # print("Number of environments:", env.n_envs)
@@ -27,12 +27,16 @@ try:
         
         # Step the environment
         obs, rewards, dones, infos = env.step(actions)
+        i+=1
+
+        if  i % 500 == 0:
+            env.reset()
         # env.render()
         
         # Print rewards at each step
         # print(f"Step {step + 1}: Rew = {rewards}")
         # print(f"Step {step + 1}: Inf = {infos}")
-        print(f"Hnadle Lenght: {len(env.robot_handles_list[0])}")
+        # print(f"Hnadle Lenght: {len(env.robot_handles_list[0])}")
 finally:
     # Ensure the environment is properly closed
     env.close()
