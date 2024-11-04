@@ -29,7 +29,8 @@ try:
         obs, rewards, dones, infos = env.step(actions)
         
         # Print rewards at each step
-        print(f"Step {step + 1}: Rew = {rewards}")
+        # print(f"Step {step + 1}: Rew = {rewards}")
+        print(f"Step {step + 1}: Inf = {infos}")
 finally:
     # Ensure the environment is properly closed
     env.close()

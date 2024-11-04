@@ -5,6 +5,7 @@ from isaacgym import gymapi
 from isaacgym import gymutil
 from scipy.spatial.transform import Rotation as R
 import gym
+from gym import spaces
 import numpy as np
 from numpy.random import default_rng
 
@@ -31,6 +32,10 @@ class HebbianEnv(gym.Env):
         self.fitness_list2 = []
         self.sensor_list = []
         self.sensor_list2 = []
+        self.current_rewards = [[] for _ in range(n_envs)]
+        self.current_light_values = [[] for _ in range(n_envs)]
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(9,), dtype=np.float32)
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
         self.initialize_simulator()
 
@@ -84,7 +89,6 @@ class HebbianEnv(gym.Env):
         return headings, positions_x, positions_y
 
     def initialize_simulator(self):
-
         self.env_list.clear()
         self.robot_handles_list.clear()
         self.controller_list.clear()
@@ -298,26 +302,39 @@ class HebbianEnv(gym.Env):
                 self.sensor_list[i_env].calculate_states(positions, headings)
                 states = self.sensor_list[i_env].get_current_state()
 
-            grad_sensor_outputs = np.array([state[-1] for state in states]) 
+            grad_sensor_outputs = np.array([state[-1] for state in states])
+            self.current_light_values = grad_sensor_outputs.tolist() 
             
             # Normalize to [0, 1] for now
             normalized_rewards = grad_sensor_outputs / 255.0
+            self.current_rewards[i_env] = normalized_rewards.tolist()
             rewards.append(normalized_rewards.tolist())
 
         return rewards
 
     def check_termination(self):
-        # Placeholder termination status
+        # Always false since dont have termination conditions other than time
         dones = []
         for i_env in range(self.n_envs):
             dones.append([False] * len(self.robot_handles_list[i_env]))
         return dones
 
     def collect_infos(self):
-        # Placeholder info
         infos = []
+
         for i_env in range(self.n_envs):
-            infos.append({})
+            mean_reward = np.mean(self.current_rewards[i_env]) if self.current_rewards[i_env] else 0.0
+            std_reward = np.std(self.current_rewards[i_env]) if self.current_rewards[i_env] else 0.0
+            mean_light = np.mean(self.current_light_values[i_env]) if self.current_light_values[i_env] else 0.0
+            std_light = np.std(self.current_light_values[i_env]) if self.current_light_values[i_env] else 0.0
+
+            infos.append({
+                "mean_reward": mean_reward,
+                "std_reward": std_reward,
+                "mean_light": mean_light,
+                "std_light": std_light
+            })
+
         return infos
 
     def close(self):
@@ -325,7 +342,6 @@ class HebbianEnv(gym.Env):
             self.gym.destroy_viewer(self.viewer)
             self.viewer = None
 
-        # Destroy the sim
         if self.sim is not None:
             self.gym.destroy_sim(self.sim)
             self.sim = None
