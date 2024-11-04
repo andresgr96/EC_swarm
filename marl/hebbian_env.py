@@ -20,7 +20,7 @@ class HebbianEnv(gym.Env):
         self.n_envs = n_envs
         self.life_timeout = 600
         self.headless = headless
-        self.individuals = self.create_individuals()  # this needs to be updated for n envs
+        self.individuals = self.create_individuals()  
         self.gym = gymapi.acquire_gym()
         self.sim = None
         self.viewer = None
@@ -32,7 +32,6 @@ class HebbianEnv(gym.Env):
         self.sensor_list = []
         self.sensor_list2 = []
 
-        # Initialize Isaac Gym and environments
         self.initialize_simulator()
 
     def calc_vel_targets(self, actions):
@@ -41,25 +40,18 @@ class HebbianEnv(gym.Env):
         :param actions: List of actions, where each action is a [linear_velocity, angular_velocity] pair
         :return: List of transformed actions as [n_l, n_r] pairs
         """
-        # Convert actions to a NumPy array if they aren't already
         actions_array = np.array(actions)
-
-        # Extract linear and angular velocities
         linear_velocities = actions_array[:, 0]
         angular_velocities = actions_array[:, 1]
 
-        # Perform the vectorized computation for n_l and n_r
         n_l = ((linear_velocities + 0.025) - (angular_velocities / 2) * 0.085) / 0.021
         n_r = ((linear_velocities + 0.025) + (angular_velocities / 2) * 0.085) / 0.021
-
-        # Stack the results to get a list of [n_l, n_r] pairs
         transformed_actions = np.column_stack((n_l, n_r))
 
         return transformed_actions
 
 
     def create_individuals(self):
-        # Create a list of individuals for each environment
         individuals = []
         for _ in range(self.n_envs):
             # Each environment gets its own list of 20 individuals
@@ -81,17 +73,11 @@ class HebbianEnv(gym.Env):
         positions_x = np.zeros_like(headings)
         positions_y = np.zeros_like(headings)
 
-        # Iterate over each robot to get its position and heading
         for i in range(num_robots):
-            # Get the rigid body state of the robot
             body_pose = self.gym.get_actor_rigid_body_states(env, robot_handles[i], gymapi.STATE_POS)["pose"][0]
-
-            # Extract the quaternion for orientation and convert it to a rotation matrix
             body_angle_mat = np.array(body_pose[1].tolist())
             r = R.from_quat(body_angle_mat)
-            headings[i] = r.as_euler('zyx')[0]  # Extract the yaw angle
-
-            # Extract the x and y positions
+            headings[i] = r.as_euler('zyx')[0]  # yaw
             positions_x[i] = body_pose[0][0]
             positions_y[i] = body_pose[0][1]
 
@@ -237,7 +223,6 @@ class HebbianEnv(gym.Env):
 
             print(f"Initialized {num_robots} robots in environment {i_env}")
 
-        # Create viewer if headless mode is off
         if not self.headless:
             self.viewer = self.gym.create_viewer(self.sim, gymapi.CameraProperties())
             if self.viewer is None:
@@ -252,21 +237,16 @@ class HebbianEnv(gym.Env):
         return initial_obs
 
     def step(self, actions):
-        # Transform the actions 
         transformed_actions = self.calc_vel_targets(actions)
-
-        # Apply actions to robots
         for i_env, env in enumerate(self.env_list):
             for i_robot, velocity_command in enumerate(transformed_actions):
                 self.gym.set_actor_dof_velocity_targets(
                     env, self.robot_handles_list[i_env][i_robot], velocity_command.astype(np.float32)
                 )
 
-        # Step the simulation
         self.gym.simulate(self.sim)
         self.gym.fetch_results(self.sim, True)
 
-        # Collect new observations and rewards
         obs = self.get_obs()
         rewards = self.calculate_rewards()
         dones = self.check_termination()
@@ -285,16 +265,12 @@ class HebbianEnv(gym.Env):
     def get_obs(self):
         obs = []
 
-        # Iterate over each environment to collect observations
         for i_env, env in enumerate(self.env_list):
-            # Get the robot handles for this environment
-            robot_handles = self.robot_handles_list[i_env]
 
-            # Get positions and headings for all robots in this environment
+            robot_handles = self.robot_handles_list[i_env]
             headings, positions_x, positions_y = self.get_pos_and_headings(env, robot_handles)
             positions = np.array([positions_x, positions_y])
 
-            # Use the appropriate sensor list to calculate the states
             if self.life_timeout >= 300 and self.env_settings['env_perturb']:
                 self.sensor_list2[i_env].calculate_states(positions, headings)
                 states = self.sensor_list2[i_env].get_current_state()
@@ -302,7 +278,6 @@ class HebbianEnv(gym.Env):
                 self.sensor_list[i_env].calculate_states(positions, headings)
                 states = self.sensor_list[i_env].get_current_state()
 
-            # Append the states as observations for this environment
             obs.append(states)
 
         return obs
@@ -311,16 +286,11 @@ class HebbianEnv(gym.Env):
     def calculate_rewards(self):
         rewards = []
 
-        # Iterate over each environment
         for i_env in range(self.n_envs):
-            # Get the robot handles for this environment
             robot_handles = self.robot_handles_list[i_env]
-
-            # Get positions and headings for all robots in this environment
             headings, positions_x, positions_y = self.get_pos_and_headings(self.env_list[i_env], robot_handles)
             positions = np.array([positions_x, positions_y])
 
-            # Use the appropriate sensor list to calculate the states
             if self.life_timeout >= 300 and self.env_settings['env_perturb']:
                 self.sensor_list2[i_env].calculate_states(positions, headings)
                 states = self.sensor_list2[i_env].get_current_state()
@@ -328,19 +298,13 @@ class HebbianEnv(gym.Env):
                 self.sensor_list[i_env].calculate_states(positions, headings)
                 states = self.sensor_list[i_env].get_current_state()
 
-            # Convert the states to a NumPy array for easier slicing
-            states_array = np.array(states)
-
-            # Extract the gradient sensor outputs (light intensity values) from the states
-            # Assuming grad_sensor_outputs are the last part of the state vector
-            grad_sensor_outputs = states_array[:, -1]  # Adjust indexing if necessary
-
-            # Use the light intensity values as rewards for each robot
-            rewards.append(grad_sensor_outputs.tolist())
+            grad_sensor_outputs = np.array([state[-1] for state in states]) 
+            
+            # Normalize to [0, 1] for now
+            normalized_rewards = grad_sensor_outputs / 255.0
+            rewards.append(normalized_rewards.tolist())
 
         return rewards
-
-
 
     def check_termination(self):
         # Placeholder termination status
@@ -357,12 +321,11 @@ class HebbianEnv(gym.Env):
         return infos
 
     def close(self):
-        # Check if the viewer exists and destroy it
         if self.viewer is not None:
             self.gym.destroy_viewer(self.viewer)
             self.viewer = None
 
-        # Destroy the simulator
+        # Destroy the sim
         if self.sim is not None:
             self.gym.destroy_sim(self.sim)
             self.sim = None
