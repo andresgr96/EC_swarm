@@ -15,10 +15,11 @@ from utils.Sensors import Sensors
 from utils.Simulate_swarm_population import EnvSettings
 
 class HebbianEnv(gym.Env):
-    def __init__(self, n_envs=1, headless=True):
+    def __init__(self, n_envs=1, n_individuals=10, headless=True):
         super(HebbianEnv, self).__init__()
         self.env_settings = EnvSettings
         self.n_envs = n_envs
+        self.n_individuals = n_individuals
         self.life_timeout = 600
         self.headless = headless
         self.individuals = self.create_individuals()  
@@ -46,12 +47,12 @@ class HebbianEnv(gym.Env):
         :return: List of transformed actions as [n_l, n_r] pairs
         """
         actions_array = np.array(actions)
-        linear_velocities = actions_array[:, 0]
-        angular_velocities = actions_array[:, 1]
+        linear_velocities = actions_array[:, :, 0]
+        angular_velocities = actions_array[:, :, 1]
 
         n_l = ((linear_velocities + 0.025) - (angular_velocities / 2) * 0.085) / 0.021
         n_r = ((linear_velocities + 0.025) + (angular_velocities / 2) * 0.085) / 0.021
-        transformed_actions = np.column_stack((n_l, n_r))
+        transformed_actions = np.stack((n_l, n_r), axis=-1)
 
         return transformed_actions
 
@@ -60,7 +61,7 @@ class HebbianEnv(gym.Env):
         individuals = []
         for _ in range(self.n_envs):
             # Each environment gets its own list of 20 individuals
-            env_individuals = [Individual(thymio_genotype("hNN", 9, 2), i) for i in range(20)]
+            env_individuals = [Individual(thymio_genotype("hNN", 9, 2), i) for i in range(self.n_individuals)]
             individuals.append(env_individuals)
         return individuals
 
@@ -241,15 +242,25 @@ class HebbianEnv(gym.Env):
         return initial_obs
 
     def step(self, actions):
+        np_actions = np.array(actions)
+        # print(f"Actions Shape: {np_actions.shape}")
         transformed_actions = self.calc_vel_targets(actions)
+        # np_trans = np.array(transformed_actions)
+        # print(f"Trans Shape: {np_trans.shape}")
+
         for i_env, env in enumerate(self.env_list):
-            for i_robot, velocity_command in enumerate(transformed_actions):
+            env_commands = transformed_actions[i_env]
+            for i_robot, velocity_command in enumerate(env_commands):
                 self.gym.set_actor_dof_velocity_targets(
                     env, self.robot_handles_list[i_env][i_robot], velocity_command.astype(np.float32)
                 )
 
         self.gym.simulate(self.sim)
         self.gym.fetch_results(self.sim, True)
+        
+        if not self.headless:
+            self.gym.step_graphics(self.sim)
+            self.gym.draw_viewer(self.viewer, self.sim, False)
 
         obs = self.get_obs()
         rewards = self.calculate_rewards()
