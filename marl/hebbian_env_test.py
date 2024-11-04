@@ -266,27 +266,23 @@ class HebbianEnv(gym.Env):
                 iys = [(i // rows) * distance - (rows - 1) * distance / 2 for i in range(num_robots)]
                 ihs = [0.0] * num_robots  # All robots face the same direction in the grid
 
-            # Create a full array for the new states
+            # Create and set new RigidBodyState for each robot
             new_states = np.zeros(num_robots, dtype=gymapi.RigidBodyState.dtype)
-            
-            # Set new positions and orientations for each robot
-            for i in range(num_robots):
-                new_states[i]['pose']['p']['x'] = ixs[i]
-                new_states[i]['pose']['p']['y'] = iys[i]
-                new_states[i]['pose']['p']['z'] = 0.033
-                rotation = R.from_euler('zyx', [ihs[i], 0.0, 0.0]).as_quat()
-                new_states[i]['pose']['r']['x'] = rotation[0]
-                new_states[i]['pose']['r']['y'] = rotation[1]
-                new_states[i]['pose']['r']['z'] = rotation[2]
-                new_states[i]['pose']['r']['w'] = rotation[3]
-                new_states[i]['vel']['linear']['x'] = 0.0
-                new_states[i]['vel']['linear']['y'] = 0.0
-                new_states[i]['vel']['linear']['z'] = 0.0
-                new_states[i]['vel']['angular']['x'] = 0.0
-                new_states[i]['vel']['angular']['y'] = 0.0
-                new_states[i]['vel']['angular']['z'] = 0.0
 
-            # Set all actor rigid body states in one call
+            for i in range(num_robots):
+                # Use gymapi.Transform for setting the pose
+                pose = gymapi.Transform()
+                pose.p = gymapi.Vec3(ixs[i], iys[i], 0.033)  # Set the position
+                rotation = R.from_euler('zyx', [ihs[i], 0.0, 0.0]).as_quat()
+                pose.r = gymapi.Quat(rotation[0], rotation[1], rotation[2], rotation[3])  # Set the rotation
+
+                # Populate the RigidBodyState array
+                new_states['pose']['p'][i] = (pose.p.x, pose.p.y, pose.p.z)
+                new_states['pose']['r'][i] = (pose.r.x, pose.r.y, pose.r.z, pose.r.w)
+                new_states['vel']['linear'][i] = (0.0, 0.0, 0.0)  # Reset linear velocity to zero
+                new_states['vel']['angular'][i] = (0.0, 0.0, 0.0)  # Reset angular velocity to zero
+
+            # Set the actor rigid body states
             for i, handle in enumerate(self.robot_handles_list[i_env]):
                 self.gym.set_actor_rigid_body_states(env, handle, new_states[i], gymapi.STATE_ALL)
 
@@ -301,6 +297,8 @@ class HebbianEnv(gym.Env):
         # Reset observations
         initial_obs = self.get_obs()
         return initial_obs
+
+
 
     def step(self, actions):
         np_actions = np.array(actions)

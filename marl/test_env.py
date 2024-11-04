@@ -29,7 +29,7 @@ try:
         obs, rewards, dones, infos = env.step(actions)
         i+=1
 
-        if  i % 500 == 0:
+        if  i % 600 == 0:
             env.reset()
         # env.render()
         
