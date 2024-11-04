@@ -1,5 +1,5 @@
 import numpy as np
-from hebbian_env import HebbianEnv  # Make sure this is the correct import path for HebbianEnv
+from marl.hebbian_env_test import HebbianEnv  # Make sure this is the correct import path for HebbianEnv
 
 # Initialize the environment
 env = HebbianEnv(n_envs=5, n_individuals=10,  headless=False)  # Set headless to False if you want to render
