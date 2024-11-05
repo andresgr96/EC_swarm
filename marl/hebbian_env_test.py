@@ -82,12 +82,17 @@ class HebbianEnv(gym.Env):
         for i in range(num_robots):
             body_pose = self.gym.get_actor_rigid_body_states(env, robot_handles[i], gymapi.STATE_POS)["pose"][0]
             body_angle_mat = np.array(body_pose[1].tolist())
+
+            if np.linalg.norm(body_angle_mat) < 1e-6:
+                body_angle_mat = np.array([0.0, 0.0, 0.0, 1.0])  # Use default unit quaternion to avoid zero norm
+
             r = R.from_quat(body_angle_mat)
             headings[i] = r.as_euler('zyx')[0]  # yaw
             positions_x[i] = body_pose[0][0]
             positions_y[i] = body_pose[0][1]
 
         return headings, positions_x, positions_y
+
 
     def initialize_simulator(self):
         self.env_list.clear()
@@ -273,8 +278,17 @@ class HebbianEnv(gym.Env):
                 # Use gymapi.Transform for setting the pose
                 pose = gymapi.Transform()
                 pose.p = gymapi.Vec3(ixs[i], iys[i], 0.033)  # Set the position
+
+                # Generate and normalize the quaternion
                 rotation = R.from_euler('zyx', [ihs[i], 0.0, 0.0]).as_quat()
-                pose.r = gymapi.Quat(rotation[0], rotation[1], rotation[2], rotation[3])  # Set the rotation
+                quaternion = np.array([rotation[0], rotation[1], rotation[2], rotation[3]])
+                norm = np.linalg.norm(quaternion)
+                if norm < 1e-6:
+                    quaternion = np.array([0.0, 0.0, 0.0, 1.0])  # Default to a unit quaternion if norm is too small
+                else:
+                    quaternion /= norm  # Normalize the quaternion
+
+                pose.r = gymapi.Quat(quaternion[0], quaternion[1], quaternion[2], quaternion[3])  # Set the rotation
 
                 # Populate the RigidBodyState array
                 new_states['pose']['p'][i] = (pose.p.x, pose.p.y, pose.p.z)
@@ -289,10 +303,6 @@ class HebbianEnv(gym.Env):
         # Simulate once to apply the new states
         self.gym.simulate(self.sim)
         self.gym.fetch_results(self.sim, True)
-
-        # Reset fitness and sensor lists
-        self.current_rewards = [[] for _ in range(self.n_envs)]
-        self.current_light_values = [[] for _ in range(self.n_envs)]
 
         # Reset observations
         initial_obs = self.get_obs()
@@ -352,11 +362,10 @@ class HebbianEnv(gym.Env):
                 self.sensor_list[i_env].calculate_states(positions, headings)
                 states = self.sensor_list[i_env].get_current_state()
 
-            # Convert states to a NumPy array 
-            states_array = np.array(states)
-            print(states_array.shape)
-            states_array[:, -1] /= 255.0
-            obs.append(states_array.tolist())
+            for state in states:
+                state[-1] = state[-1] / 255.0 
+
+            obs.append(states)
 
         return obs
 
@@ -378,7 +387,7 @@ class HebbianEnv(gym.Env):
                 states = self.sensor_list[i_env].get_current_state()
 
             grad_sensor_outputs = np.array([state[-1] for state in states])
-            self.current_light_values = grad_sensor_outputs.tolist() 
+            self.current_light_values[i_env] = grad_sensor_outputs.tolist() 
             
             # Normalize to [0, 1] for now
             normalized_rewards = grad_sensor_outputs / 255.0
