@@ -2,7 +2,7 @@ import numpy as np
 from hebbian_env_test import HebbianEnv
 
 # Initialize the environment
-env = HebbianEnv(n_envs=5, n_individuals=10,  headless=False)  # Set headless to False if you want to render
+env = HebbianEnv(n_envs=5, n_individuals=10,  headless=True)  # Set headless to False if you want to render
 
 # Reset the environment to get the initial observations
 obs = env.reset()
@@ -27,6 +27,7 @@ try:
         
         # Step the environment
         obs, rewards, dones, infos = env.step(actions)
+        # print(obs[0][-1])
         i+=1
 
         if  i % 600 == 0:

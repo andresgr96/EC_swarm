@@ -352,9 +352,14 @@ class HebbianEnv(gym.Env):
                 self.sensor_list[i_env].calculate_states(positions, headings)
                 states = self.sensor_list[i_env].get_current_state()
 
-            obs.append(states)
+            # Convert states to a NumPy array 
+            states_array = np.array(states)
+            print(states_array.shape)
+            states_array[:, -1] /= 255.0
+            obs.append(states_array.tolist())
 
         return obs
+
 
 
     def calculate_rewards(self):
