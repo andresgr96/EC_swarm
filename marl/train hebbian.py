@@ -78,16 +78,21 @@ def train(arglist):
         episode_step = 0
         train_step = 0
         current_episode = 1
+        current_generation = 1
         episode_start_time = time.time()
         losses = []
+        episode_light_values = []
 
-        # Set up the loss file path at the same directory level as the script
+
+        # Set up the file paths
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        loss_dir = os.path.join(script_dir, "logs", arglist.exp_name)
-        os.makedirs(loss_dir, exist_ok=True)
-        loss_file_path = os.path.join(loss_dir, "mean_loss_values.txt")
+        log_dir = os.path.join(script_dir, "logs", arglist.exp_name)
+        os.makedirs(log_dir, exist_ok=True)
+        loss_file_path = os.path.join(log_dir, "mean_loss_values.txt")
+        fitness_file_path = os.path.join(log_dir, "mean_fitness_values.txt")
 
-        with open(loss_file_path, "a") as loss_file:
+
+        with open(loss_file_path, "a") as loss_file, open(fitness_file_path, "a") as fitness_file:
             print("Starting training iterations...")
             while True:
                 all_actions = []
@@ -99,10 +104,15 @@ def train(arglist):
                 new_obs_n, rew_n, done_n, info_n = env.step(all_actions)
                 episode_step += 1
 
+                if episode_step % 250 == 0:
+                    mid_episode_duration = time.time() - episode_start_time
+                    mid_episode_duration_minutes = mid_episode_duration / 60
+                    print(f"Generation: {current_generation}, Episode: {current_episode}/{arglist.num_episodes}, Ep Step: {episode_step}")
+                    print(f"Time elapsed since episode start: {mid_episode_duration_minutes:.2f}")
+
                 done = all([all(agent_done) for agent_done in done_n])
                 terminal = (episode_step >= arglist.max_episode_len)
 
-                # Collect experiences
                 for env_idx in range(arglist.n_envs):
                     for agent_idx, agent in enumerate(trainers):
                         agent.experience(
@@ -121,9 +131,15 @@ def train(arglist):
                         episode_rewards[-1] += rew
                         agent_rewards[i][-1] += rew
 
+                # Track mean light intensity during the last episode of each generation
+                if current_episode % 3 == 0:
+                    episode_light_values.extend([info["mean_light"] for info in info_n])
+
                 if done or terminal:
                     episode_duration = time.time() - episode_start_time
+                    episode_duration_minutes = episode_duration / 60
                     episode_start_time = time.time()
+                    print(f"Episode {current_episode} done. Episode time: {episode_duration_minutes:.2f} minutes")
 
                     obs_n = env.reset()
                     episode_step = 0
@@ -131,10 +147,17 @@ def train(arglist):
                     episode_rewards.append(0)
                     for a in agent_rewards:
                         a.append(0)
-                
+
+                    if current_episode % 3 == 1:  # Means the previous episode was the 3rd in the generation
+                        mean_light_intensity = np.mean(episode_light_values)
+                        fitness_file.write(f"{mean_light_intensity}\n")
+                        fitness_file.flush()  
+                        print(f"Generation {current_generation} mean light intensity: {mean_light_intensity}")
+                        episode_light_values.clear()  
+                        current_generation += 1
+
                 train_step += 1
 
-                # Update policies and log losses
                 if train_step % 100 == 0:
                     agent_losses = []
                     for agent in trainers:
@@ -147,10 +170,8 @@ def train(arglist):
                     if agent_losses:
                         mean_agent_loss = np.mean(agent_losses)
                         losses.append(mean_agent_loss)
-
-                        # Write the mean loss to the file
                         loss_file.write(f"{mean_agent_loss}\n")
-                        loss_file.flush()  # Ensure it's written immediately
+                        loss_file.flush()  
 
                 # Save model
                 if terminal and (len(episode_rewards) % arglist.save_rate == 0):
