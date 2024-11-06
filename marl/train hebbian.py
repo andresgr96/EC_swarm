@@ -1,3 +1,4 @@
+import os
 import argparse
 import numpy as np
 import tensorflow as tf
@@ -11,8 +12,6 @@ warnings.filterwarnings("ignore")
 
 import maddpg.common.tf_util as U
 from maddpg.trainer.maddpg import MADDPGAgentTrainer
-# import tensorflow.contrib.layers as layers
-
 from hebbian_env import HebbianEnv
 
 def parse_args():
@@ -28,29 +27,14 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=128, help="number of episodes to optimize at the same time")
     parser.add_argument("--num-units", type=int, default=64, help="number of units in the MLP")
     # Checkpointing
-    parser.add_argument("--exp-name", type=str, default=None, help="name of the experiment")
-    parser.add_argument("--save-dir", type=str, default="./results/exp2", help="directory in which training state and model should be saved")
+    parser.add_argument("--exp-name", type=str, default="experiment2", help="name of the experiment")
+    parser.add_argument("--save-dir", type=str, default="./results/exp2", help="directory to save model")
     parser.add_argument("--save-rate", type=int, default=1, help="save model every this many episodes")
-    parser.add_argument("--load-dir", type=str, default="./results/exp1", help="directory in which training state and model are loaded")
+    parser.add_argument("--load-dir", type=str, default="./results/exp1", help="directory to load model")
     # Evaluation
     parser.add_argument("--restore", action="store_true", default=False)
     parser.add_argument("--display", action="store_true", default=False)
     return parser.parse_args()
-
-# Initialize the plot
-plt.ion()  # Turn on interactive mode
-fig, ax = plt.subplots()
-ax.set_xlabel('Training Steps (x100)')
-ax.set_ylabel('Mean Loss')
-line, = ax.plot([], [], 'r-')  # Create an empty line to update
-
-def update_plot(losses):
-    line.set_xdata(np.arange(len(losses)))  # Update the x data
-    line.set_ydata(losses)  # Update the y data
-    ax.relim()  # Recalculate limits
-    ax.autoscale_view()  # Rescale the view
-    plt.draw()  # Draw the updated plot
-    plt.pause(0.001)  # Pause briefly to allow the plot to update
 
 def mlp_model(input, num_outputs, scope, reuse=False, num_units=64):
     with tf.compat.v1.variable_scope(scope, reuse=reuse):
@@ -61,14 +45,12 @@ def mlp_model(input, num_outputs, scope, reuse=False, num_units=64):
         return out
 
 def make_env(n_envs, n_individuals, headless=True):
-    env = HebbianEnv(n_envs=n_envs, n_individuals=n_individuals, headless=headless)
-    return env
+    return HebbianEnv(n_envs=n_envs, n_individuals=n_individuals, headless=headless)
 
 def get_trainers(env, n_individuals, arglist):
     trainers = []
     model = mlp_model
     trainer = MADDPGAgentTrainer
-
     for i in range(n_individuals):
         trainers.append(trainer(
             "agent_%d" % i, model, [env.observation_space.shape] * n_individuals,
@@ -83,130 +65,103 @@ def train(arglist):
         print("Using MADDPG with", arglist.n_individuals, "unique agents")
         U.initialize()
 
-
         if arglist.load_dir == "":
             arglist.load_dir = arglist.save_dir
         if arglist.restore:
             print("Loading previous state...")
             U.load_state(arglist.load_dir)
 
-        episode_rewards = [0.0]  # Sum of rewards for all agents
-        agent_rewards = [[0.0] for _ in range(arglist.n_individuals)]  # Individual agent rewards
-        final_ep_rewards = []  # Sum of rewards for training curve
-        final_ep_ag_rewards = []  # Agent rewards for training curve
-        agent_info = [[[]]]  # Placeholder for benchmarking info
+        episode_rewards = [0.0]
+        agent_rewards = [[0.0] for _ in range(arglist.n_individuals)]
         saver = tf.compat.v1.train.Saver()
-        obs_n = env.reset()  # Reset environment
+        obs_n = env.reset()
         episode_step = 0
         train_step = 0
         current_episode = 1
-        current_generation = 1
-        t_start = time.time()
         episode_start_time = time.time()
-        episode_durations = []
         losses = []
 
-        print("Starting training iterations...")
-        while True:
-            all_actions = []  # Collect all actions for all environments
-            for env_idx in range(arglist.n_envs):
-                observations = obs_n[env_idx]  # Observations for this specific environment
-                action_n = [agent.action(observations[i]) for i, agent in enumerate(trainers)]
-                all_actions.append(action_n)
+        # Set up the loss file path at the same directory level as the script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        loss_dir = os.path.join(script_dir, "logs", arglist.exp_name)
+        os.makedirs(loss_dir, exist_ok=True)
+        loss_file_path = os.path.join(loss_dir, "mean_loss_values.txt")
 
-            new_obs_n, rew_n, done_n, info_n = env.step(all_actions)
-            episode_step += 1
-            if episode_step % 500 == 0:
-                mid_episode_duration = time.time() - episode_start_time
-                mid_episode_duration_minutes = mid_episode_duration / 60
-                print(f"Generation: {current_generation}, Episode: {current_episode}/{arglist.num_episodes}, Ep Step: {episode_step}")
-                print(f"Time elapsed since episode start: {mid_episode_duration_minutes:.2f}")
+        with open(loss_file_path, "a") as loss_file:
+            print("Starting training iterations...")
+            while True:
+                all_actions = []
+                for env_idx in range(arglist.n_envs):
+                    observations = obs_n[env_idx]
+                    action_n = [agent.action(observations[i]) for i, agent in enumerate(trainers)]
+                    all_actions.append(action_n)
 
-            done = all([all(agent_done) for agent_done in done_n])
-            terminal = (episode_step >= arglist.max_episode_len)
+                new_obs_n, rew_n, done_n, info_n = env.step(all_actions)
+                episode_step += 1
 
-            # Collect experiences
-            for env_idx in range(arglist.n_envs):
-                for agent_idx, agent in enumerate(trainers):
-                    agent.experience(
-                        obs_n[env_idx][agent_idx],  # Observation for this agent in this environment
-                        all_actions[env_idx][agent_idx],  # Action taken by this agent
-                        rew_n[env_idx][agent_idx],  # Reward for this agent
-                        new_obs_n[env_idx][agent_idx],  # New observation for this agent
-                        done_n[env_idx][agent_idx],  # Done flag for this agent
-                        terminal
-                    )
-            obs_n = new_obs_n
+                done = all([all(agent_done) for agent_done in done_n])
+                terminal = (episode_step >= arglist.max_episode_len)
 
-            for env_idx in range(arglist.n_envs):
-                for i, rew in enumerate(rew_n[env_idx]):
-                    episode_rewards[-1] += rew
-                    agent_rewards[i][-1] += rew
+                # Collect experiences
+                for env_idx in range(arglist.n_envs):
+                    for agent_idx, agent in enumerate(trainers):
+                        agent.experience(
+                            obs_n[env_idx][agent_idx], 
+                            all_actions[env_idx][agent_idx], 
+                            rew_n[env_idx][agent_idx], 
+                            new_obs_n[env_idx][agent_idx], 
+                            done_n[env_idx][agent_idx], 
+                            terminal
+                        )
+                obs_n = new_obs_n
 
-            if done or terminal:
-                # Calculate the duration of the episode
-                episode_duration = time.time() - episode_start_time
-                episode_duration_minutes = episode_duration / 60
-                episode_durations.append(episode_duration_minutes)
-                mean_dur = np.mean(episode_durations)
-                episodes_left = arglist.num_episodes - current_episode
-                time_left_minutes = mean_dur * episodes_left
-                hours_left = int(time_left_minutes // 60)
-                minutes_left = int(time_left_minutes % 60)
+                # Accumulate rewards for logging
+                for env_idx in range(arglist.n_envs):
+                    for i, rew in enumerate(rew_n[env_idx]):
+                        episode_rewards[-1] += rew
+                        agent_rewards[i][-1] += rew
 
-                print(f"Episode {current_episode} done. Episode time: {episode_duration_minutes:.2f} minutes")
-                print(f"Expected experiment time left: {hours_left} hours and {minutes_left} minutes")
+                if done or terminal:
+                    episode_duration = time.time() - episode_start_time
+                    episode_start_time = time.time()
 
-                episode_start_time = time.time()
-
-                obs_n = env.reset()
-                episode_step = 0
-                current_episode += 1
-                if current_episode % (arglist.num_episodes / 100) == 0:  # We always have 100 generations
-                    mean_light_values = [info["mean_light"] for info in info_n]
-                    overall_mean_light = np.mean(mean_light_values)
-                    print(f"Final Generation {current_generation} mean light intensity at end of last episode{overall_mean_light}")
-                    current_generation += 1
-                episode_rewards.append(0)
-                for a in agent_rewards:
-                    a.append(0)
-                agent_info.append([[]])
-
-            # Increment the global step counter
-            train_step += 1
-            agent_losses = []
-            # Update policies
-            if train_step % 100 == 0:
-                agent_losses = []
-                for agent in trainers:
-                    agent.preupdate()
-                for agent in trainers:
-                    loss = agent.update(trainers, train_step)
-                    if loss is not None:  # Only append valid loss values
-                        agent_losses.append(loss)
+                    obs_n = env.reset()
+                    episode_step = 0
+                    current_episode += 1
+                    episode_rewards.append(0)
+                    for a in agent_rewards:
+                        a.append(0)
                 
-                # Check if agent_losses is not empty before computing the mean
-                if agent_losses:
-                    mean_agent_loss = np.mean(agent_losses)
-                    losses.append(mean_agent_loss)
-                    print(f"Losses: {losses}")
+                train_step += 1
 
+                # Update policies and log losses
+                if train_step % 100 == 0:
+                    agent_losses = []
+                    for agent in trainers:
+                        agent.preupdate()
+                    for agent in trainers:
+                        loss = agent.update(trainers, train_step)
+                        if loss is not None:
+                            agent_losses.append(loss)
 
-            # Save model and print training output
-            if terminal and (len(episode_rewards) % arglist.save_rate == 0):
-                U.save_state(arglist.save_dir, saver=saver)
-                print("steps: {}, episodes: {}, mean episode reward: {}, time: {}".format(
-                    train_step, len(episode_rewards), np.mean(episode_rewards[-arglist.save_rate:]), round(time.time() - t_start, 3)))
-                t_start = time.time()
-                final_ep_rewards.append(np.mean(episode_rewards[-arglist.save_rate:]))
-                for rew in agent_rewards:
-                    final_ep_ag_rewards.append(np.mean(rew[-arglist.save_rate:]))
+                    if agent_losses:
+                        mean_agent_loss = np.mean(agent_losses)
+                        losses.append(mean_agent_loss)
 
-            # Stop if the number of episodes is reached
-            if len(episode_rewards) > arglist.num_episodes:
-                print("...Finished total of {} episodes.".format(len(episode_rewards)))
-                break
+                        # Write the mean loss to the file
+                        loss_file.write(f"{mean_agent_loss}\n")
+                        loss_file.flush()  # Ensure it's written immediately
 
+                # Save model
+                if terminal and (len(episode_rewards) % arglist.save_rate == 0):
+                    U.save_state(arglist.save_dir, saver=saver)
+                    print("steps: {}, episodes: {}, mean episode reward: {}, time: {}".format(
+                        train_step, len(episode_rewards), np.mean(episode_rewards[-arglist.save_rate:]), round(time.time() - episode_start_time, 3)))
+
+                # Stop if the number of episodes is reached
+                if len(episode_rewards) > arglist.num_episodes:
+                    print("...Finished total of {} episodes.".format(len(episode_rewards)))
+                    break
 
 if __name__ == "__main__":
     arglist = parse_args()
