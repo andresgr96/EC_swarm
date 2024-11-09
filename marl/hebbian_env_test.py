@@ -3,6 +3,7 @@ import re
 from typing import List
 from isaacgym import gymapi
 from isaacgym import gymutil
+from isaacgym import gymtorch
 from scipy.spatial.transform import Rotation as R
 import gym
 from gym import spaces
@@ -13,6 +14,7 @@ from utils.Fitnesses import FitnessCalculator
 from utils.Individual import Individual, thymio_genotype
 from utils.Sensors import Sensors
 from utils.Simulate_swarm_population import EnvSettings
+import torch
 
 class HebbianEnv(gym.Env):
     def __init__(self, n_envs=1, n_individuals=10, headless=True):
@@ -240,11 +242,29 @@ class HebbianEnv(gym.Env):
             self.viewer = self.gym.create_viewer(self.sim, gymapi.CameraProperties())
             if self.viewer is None:
                 raise RuntimeError("*** Failed to create viewer")
+            
 
+        # Set up initial root states and DOF states after loading assets
+        actor_root_state = self.gym.acquire_actor_root_state_tensor(self.sim)
+        dof_state_tensor = self.gym.acquire_dof_state_tensor(self.sim)
+
+        # Wrap tensors for easier manipulation
+        self.root_states = gymtorch.wrap_tensor(actor_root_state)
+        # print(self.root_states)
+        self.dof_states = gymtorch.wrap_tensor(dof_state_tensor)
+        # print(self.dof_states)
+
+        # Clone initial states
+        self.initial_root_states = self.root_states.clone()
+        self.initial_dof_states = self.dof_states.clone()
+
+        # Zero out velocities for initial states
+        self.initial_root_states[:, 7:13] = 0  # zero linear and angular velocity in initial state
+        self.initial_dof_states[:, 1] = 0  # zero out dof velocity
+            
 
     def reset(self):
-        # Reset robot positions without destroying the simulator
-        rng = default_rng()
+        rng = np.random.default_rng()
         num_robots = self.n_individuals
         arena_length = int(re.findall(r'\d+', self.env_settings['arena_type'])[-1])
         init_area = arena_length / 10
@@ -263,7 +283,8 @@ class HebbianEnv(gym.Env):
                     distances = np.hypot(x_diff, y_diff)
                     init_failure = np.any(distances[np.triu_indices(num_robots, k=1)] < 0.2)
 
-                ihs = 2 * np.pi * rng.random(num_robots)
+                # Generate random yaw angles for each robot
+                ihs = rng.uniform(-np.pi, np.pi, size=(num_robots,))
             else:
                 distance = 0.5
                 rows = int(np.ceil(np.sqrt(num_robots)))
@@ -271,44 +292,47 @@ class HebbianEnv(gym.Env):
                 iys = [(i // rows) * distance - (rows - 1) * distance / 2 for i in range(num_robots)]
                 ihs = [0.0] * num_robots  # All robots face the same direction in the grid
 
-            # Create and set new RigidBodyState for each robot
-            new_states = np.zeros(num_robots, dtype=gymapi.RigidBodyState.dtype)
-
-            for i in range(num_robots):
-                # Use gymapi.Transform for setting the pose
-                pose = gymapi.Transform()
-                pose.p = gymapi.Vec3(ixs[i], iys[i], 0.033)  # Set the position
-
-                # Generate and normalize the quaternion
-                rotation = R.from_euler('zyx', [ihs[i], 0.0, 0.0]).as_quat()
-                quaternion = np.array([rotation[0], rotation[1], rotation[2], rotation[3]])
-                norm = np.linalg.norm(quaternion)
-                if norm < 1e-6:
-                    quaternion = np.array([0.0, 0.0, 0.0, 1.0])  # Default to a unit quaternion if norm is too small
-                else:
-                    quaternion /= norm  # Normalize the quaternion
-
-                pose.r = gymapi.Quat(quaternion[0], quaternion[1], quaternion[2], quaternion[3])  # Set the rotation
-
-                # Populate the RigidBodyState array
-                new_states['pose']['p'][i] = (pose.p.x, pose.p.y, pose.p.z)
-                new_states['pose']['r'][i] = (pose.r.x, pose.r.y, pose.r.z, pose.r.w)
-                new_states['vel']['linear'][i] = (0.0, 0.0, 0.0)  # Reset linear velocity to zero
-                new_states['vel']['angular'][i] = (0.0, 0.0, 0.0)  # Reset angular velocity to zero
-
-            # Set the actor rigid body states
+            # Apply perturbations to root states for each robot in this environment
             for i, handle in enumerate(self.robot_handles_list[i_env]):
-                self.gym.set_actor_rigid_body_states(env, handle, new_states[i], gymapi.STATE_ALL)
+                # Set up initial position and orientation
+                position = torch.tensor([ixs[i], iys[i], 0.033], device=self.initial_root_states.device)
+                yaw = ihs[i]
+                random_quat = R.from_euler('zyx', [yaw, 0.0, 0.0]).as_quat()
+                quaternion = torch.tensor(random_quat, device=self.initial_root_states.device)
 
-        # Simulate once to apply the new states
+                # Update initial_root_states with position and orientation
+                self.initial_root_states[handle, 0:3] = position
+                self.initial_root_states[handle, 3:7] = quaternion
+                self.initial_root_states[handle, 7:13] = 0  # zero linear and angular velocity
+
+            # Convert the actor indices for Isaac Gym compatibility
+            env_actor_handles = torch.tensor(self.robot_handles_list[i_env], dtype=torch.int32, device=self.initial_root_states.device)
+            env_actor_handles_gym = gymtorch.unwrap_tensor(env_actor_handles)
+
+            # Apply initial state changes
+            self.gym.set_actor_root_state_tensor_indexed(
+                self.sim,
+                gymtorch.unwrap_tensor(self.initial_root_states),
+                env_actor_handles_gym,
+                len(self.robot_handles_list[i_env])
+            )
+
+            # Apply initial DOF states as well
+            self.gym.set_dof_state_tensor_indexed(
+                self.sim,
+                gymtorch.unwrap_tensor(self.initial_dof_states),
+                env_actor_handles_gym,
+                len(self.robot_handles_list[i_env])
+            )
+
+        # Simulate one step to apply reset states
         self.gym.simulate(self.sim)
         self.gym.fetch_results(self.sim, True)
 
-        # Reset observations
-        initial_obs = self.get_obs()
-        return initial_obs
-
-
+        # Refresh and return new observations
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self.gym.refresh_dof_state_tensor(self.sim)
+        return self.get_obs()
 
     def step(self, actions):
         np_actions = np.array(actions)
@@ -335,6 +359,17 @@ class HebbianEnv(gym.Env):
         rewards = self.calculate_rewards()
         dones = self.check_termination()
         infos = self.collect_infos()
+
+        self.gym.refresh_dof_state_tensor(self.sim)
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        
+        # root_states = self.gym.acquire_actor_root_state_tensor(self.sim)
+        # root_tensor = gymtorch.wrap_tensor(root_states)
+        # print(root_tensor)
+
+        # dof_root_states = self.gym.acquire_dof_state_tensor(self.sim)
+        # dof_root_tensor = gymtorch.wrap_tensor(dof_root_states)
+        # print(dof_root_tensor)
 
         return obs, rewards, dones, infos
 
