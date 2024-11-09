@@ -85,15 +85,26 @@ class HebbianEnv(gym.Env):
             body_pose = self.gym.get_actor_rigid_body_states(env, robot_handles[i], gymapi.STATE_POS)["pose"][0]
             body_angle_mat = np.array(body_pose[1].tolist())
 
-            if np.linalg.norm(body_angle_mat) < 1e-6:
-                body_angle_mat = np.array([0.0, 0.0, 0.0, 1.0])  # Use default unit quaternion to avoid zero norm
+            try:
+                r = R.from_quat(body_angle_mat)
+                if r.magnitude() < 1e-6:
+                    print("Zero-magnitude quaternion detected, setting to default.")
+                    body_angle_mat = np.array([0.0, 0.0, 0.0, 1.0])
+                    r = R.from_quat(body_angle_mat)
+                headings[i] = r.as_euler('zyx')[0]  # yaw
+            except ValueError:
+                print("Invalid quaternion encountered; defaulting to identity rotation.")
+                print(body_angle_mat)
+                body_angle_mat = np.array([0.0, 0.0, 0.0, 1.0])  # Default valid quaternion
+                r = R.from_quat(body_angle_mat)
+                headings[i] = r.as_euler('zyx')[0]  # yaw
 
-            r = R.from_quat(body_angle_mat)
-            headings[i] = r.as_euler('zyx')[0]  # yaw
             positions_x[i] = body_pose[0][0]
             positions_y[i] = body_pose[0][1]
 
         return headings, positions_x, positions_y
+
+
 
 
     def initialize_simulator(self):
@@ -120,6 +131,9 @@ class HebbianEnv(gym.Env):
         sim_params.physx.num_position_iterations = 4
         sim_params.physx.num_velocity_iterations = 1
         sim_params.physx.num_threads = args.num_threads
+
+        # Increase GPU memory allocation?
+        sim_params.physx.max_gpu_contact_pairs = 2_000_000 
         sim_params.physx.use_gpu = True
 
         # Create the simulator
@@ -332,6 +346,7 @@ class HebbianEnv(gym.Env):
         # Refresh and return new observations
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_dof_state_tensor(self.sim)
+
         return self.get_obs()
 
     def step(self, actions):
@@ -363,13 +378,6 @@ class HebbianEnv(gym.Env):
         self.gym.refresh_dof_state_tensor(self.sim)
         self.gym.refresh_actor_root_state_tensor(self.sim)
         
-        # root_states = self.gym.acquire_actor_root_state_tensor(self.sim)
-        # root_tensor = gymtorch.wrap_tensor(root_states)
-        # print(root_tensor)
-
-        # dof_root_states = self.gym.acquire_dof_state_tensor(self.sim)
-        # dof_root_tensor = gymtorch.wrap_tensor(dof_root_states)
-        # print(dof_root_tensor)
 
         return obs, rewards, dones, infos
 
