@@ -17,12 +17,12 @@ from hebbian_env import HebbianEnv
 def parse_args():
     parser = argparse.ArgumentParser("Reinforcement Learning experiments for multiagent environments")
     # Environment
-    parser.add_argument("--n-envs", type=int, default=30, help="number of parallel environments")
+    parser.add_argument("--n-envs", type=int, default=20, help="number of parallel environments")
     parser.add_argument("--n-individuals", type=int, default=20, help="number of unique agents per environment")
     parser.add_argument("--max-episode-len", type=int, default=6000, help="maximum episode length")
     parser.add_argument("--num-episodes", type=int, default=300, help="number of episodes")
     # Core training parameters
-    parser.add_argument("--lr", type=float, default=1e-2, help="learning rate for Adam optimizer")
+    parser.add_argument("--lr", type=float, default=1e-3, help="learning rate for Adam optimizer")
     parser.add_argument("--gamma", type=float, default=0.95, help="discount factor")
     parser.add_argument("--batch-size", type=int, default=128, help="number of episodes to optimize at the same time")
     parser.add_argument("--num-units", type=int, default=64, help="number of units in the MLP")
@@ -41,7 +41,7 @@ def mlp_model(input, num_outputs, scope, reuse=False, num_units=64):
         out = input
         out = tf.compat.v1.layers.dense(out, num_units, activation=tf.nn.relu)
         out = tf.compat.v1.layers.dense(out, num_units, activation=tf.nn.relu)
-        out = tf.compat.v1.layers.dense(out, num_outputs, activation=None)
+        out = tf.compat.v1.layers.dense(out, num_outputs, activation=tf.nn.tanh)
         return out
 
 def make_env(n_envs, n_individuals, headless=True):
@@ -59,6 +59,10 @@ def get_trainers(env, n_individuals, arglist):
     return trainers
 
 def train(arglist):
+    script_dir = os.path.dirname(os.path.abspath(__file__))  # Directory of the current script
+    # Join the script directory with the save directory argument
+    arglist.save_dir = os.path.join(script_dir, arglist.save_dir)
+
     with U.single_threaded_session():
         env = make_env(arglist.n_envs, arglist.n_individuals, headless=not arglist.display)
         trainers = get_trainers(env, arglist.n_individuals, arglist)
@@ -83,14 +87,11 @@ def train(arglist):
         losses = []
         episode_light_values = []
 
-
         # Set up the file paths
-        script_dir = os.path.dirname(os.path.abspath(__file__))
         log_dir = os.path.join(script_dir, "logs", arglist.exp_name)
         os.makedirs(log_dir, exist_ok=True)
         loss_file_path = os.path.join(log_dir, "mean_loss_values.txt")
         fitness_file_path = os.path.join(log_dir, "mean_fitness_values.txt")
-
 
         with open(loss_file_path, "a") as loss_file, open(fitness_file_path, "a") as fitness_file:
             print("Starting training iterations...")
@@ -102,6 +103,7 @@ def train(arglist):
                     all_actions.append(action_n)
 
                 new_obs_n, rew_n, done_n, info_n = env.step(all_actions)
+
                 episode_step += 1
 
                 if episode_step % 250 == 0:
@@ -159,30 +161,62 @@ def train(arglist):
                 train_step += 1
 
                 if train_step % 100 == 0:
-                    agent_losses = []
+                    # Initialize lists to store each loss component across agents
+                    q_losses, p_losses, mean_target_qs, mean_rewards, mean_target_q_nexts, std_target_qs = [], [], [], [], [], []
                     for agent in trainers:
                         agent.preupdate()
                     for agent in trainers:
                         loss = agent.update(trainers, train_step)
                         if loss is not None:
-                            agent_losses.append(loss)
+                            # Unpack each component from the loss returned by update()
+                            q_loss, p_loss, mean_target_q, mean_rew, mean_target_q_next, std_target_q = loss
+                            q_losses.append(q_loss)
+                            p_losses.append(p_loss)
+                            mean_target_qs.append(mean_target_q)
+                            mean_rewards.append(mean_rew)
+                            mean_target_q_nexts.append(mean_target_q_next)
+                            std_target_qs.append(std_target_q)
 
-                    if agent_losses:
-                        mean_agent_loss = np.mean(agent_losses)
-                        losses.append(mean_agent_loss)
-                        loss_file.write(f"{mean_agent_loss}\n")
-                        loss_file.flush()  
+                    if q_losses:  # Proceed if losses were collected
+                        # Calculate the mean for each loss component
+                        mean_q_loss = np.mean(q_losses)
+                        mean_p_loss = np.mean(p_losses)
+                        mean_target_q = np.mean(mean_target_qs)
+                        mean_reward = np.mean(mean_rewards)
+                        mean_target_q_next = np.mean(mean_target_q_nexts)
+                        std_target_q = np.mean(std_target_qs)
 
-                # Save model
-                if terminal and (len(episode_rewards) % arglist.save_rate == 0):
-                    U.save_state(arglist.save_dir, saver=saver)
+                        # Format the output and write to the log file
+                        loss_output = (
+                            f"q_loss: {mean_q_loss}, p_loss: {mean_p_loss}, "
+                            f"mean_target_q: {mean_target_q}, mean_reward: {mean_reward}, "
+                            f"mean_target_q_next: {mean_target_q_next}, std_target_q: {std_target_q}\n"
+                        )
+                        loss_file.write(loss_output)
+                        loss_file.flush()  # Ensure it's written immediately
+
+                # Save model with unique path including the episode number
+                if terminal and (current_episode % arglist.save_rate == 0):
+                    # Define a unique save path by adding the episode number
+                    episode_save_dir = os.path.join(arglist.save_dir, f"episode_{current_episode}")
+                    os.makedirs(episode_save_dir, exist_ok=True)  # Create directory if it doesn't exist
+
+                    # Save the model in the new directory
+                    U.save_state(episode_save_dir, saver=saver)
+                    
+                    # Print information about the save
                     print("steps: {}, episodes: {}, mean episode reward: {}, time: {}".format(
-                        train_step, len(episode_rewards), np.mean(episode_rewards[-arglist.save_rate:]), round(time.time() - episode_start_time, 3)))
+                        train_step, len(episode_rewards), np.mean(episode_rewards[:-1]),
+                        round(time.time() - episode_start_time, 3)
+                    ))
+                    print(f"Model saved for episode {current_episode} in {episode_save_dir}")
+
 
                 # Stop if the number of episodes is reached
                 if len(episode_rewards) > arglist.num_episodes:
                     print("...Finished total of {} episodes.".format(len(episode_rewards)))
                     break
+
 
 if __name__ == "__main__":
     arglist = parse_args()

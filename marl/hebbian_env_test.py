@@ -94,6 +94,15 @@ class HebbianEnv(gym.Env):
                 headings[i] = r.as_euler('zyx')[0]  # yaw
             except ValueError:
                 print("Invalid quaternion encountered; defaulting to identity rotation.")
+
+                # Set up initial root states and DOF states after loading assets
+                actor_root_state = self.gym.acquire_actor_root_state_tensor(self.sim)
+                root_states = gymtorch.wrap_tensor(actor_root_state)
+                print(root_states[3:7])
+
+
+
+
                 print(body_angle_mat)
                 body_angle_mat = np.array([0.0, 0.0, 0.0, 1.0])  # Default valid quaternion
                 r = R.from_quat(body_angle_mat)
@@ -256,9 +265,11 @@ class HebbianEnv(gym.Env):
             self.viewer = self.gym.create_viewer(self.sim, gymapi.CameraProperties())
             if self.viewer is None:
                 raise RuntimeError("*** Failed to create viewer")
-            
 
         # Set up initial root states and DOF states after loading assets
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self.gym.refresh_dof_state_tensor(self.sim)
+
         actor_root_state = self.gym.acquire_actor_root_state_tensor(self.sim)
         dof_state_tensor = self.gym.acquire_dof_state_tensor(self.sim)
 
@@ -283,6 +294,9 @@ class HebbianEnv(gym.Env):
         arena_length = int(re.findall(r'\d+', self.env_settings['arena_type'])[-1])
         init_area = arena_length / 10
         arena_center = arena_length / 2
+
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self.gym.refresh_dof_state_tensor(self.sim)
 
         for i_env, env in enumerate(self.env_list):
             if self.env_settings['random_start']:
@@ -365,6 +379,8 @@ class HebbianEnv(gym.Env):
 
         self.gym.simulate(self.sim)
         self.gym.fetch_results(self.sim, True)
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self.gym.refresh_dof_state_tensor(self.sim)
         
         if not self.headless:
             self.gym.step_graphics(self.sim)
@@ -374,9 +390,6 @@ class HebbianEnv(gym.Env):
         rewards = self.calculate_rewards()
         dones = self.check_termination()
         infos = self.collect_infos()
-
-        self.gym.refresh_dof_state_tensor(self.sim)
-        self.gym.refresh_actor_root_state_tensor(self.sim)
         
 
         return obs, rewards, dones, infos
