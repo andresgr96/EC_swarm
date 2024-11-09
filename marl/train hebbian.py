@@ -27,8 +27,8 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=128, help="number of episodes to optimize at the same time")
     parser.add_argument("--num-units", type=int, default=64, help="number of units in the MLP")
     # Checkpointing
-    parser.add_argument("--exp-name", type=str, default="experiment2", help="name of the experiment")
-    parser.add_argument("--save-dir", type=str, default="./results/exp2", help="directory to save model")
+    parser.add_argument("--exp-name", type=str, default="experiment", help="name of the experiment")
+    parser.add_argument("--save-dir", type=str, default="./results/", help="directory to save model")
     parser.add_argument("--save-rate", type=int, default=1, help="save model every this many episodes")
     parser.add_argument("--load-dir", type=str, default="./results/exp1", help="directory to load model")
     # Evaluation
@@ -59,9 +59,19 @@ def get_trainers(env, n_individuals, arglist):
     return trainers
 
 def train(arglist):
-    script_dir = os.path.dirname(os.path.abspath(__file__))  # Directory of the current script
-    # Join the script directory with the save directory argument
-    arglist.save_dir = os.path.join(script_dir, arglist.save_dir)
+    script_dir = os.path.dirname(os.path.abspath(__file__))  
+    base_save_dir = os.path.join(script_dir, arglist.save_dir)
+    exp_save_dir = os.path.join(base_save_dir, arglist.exp_name)
+    tracking_int = 1
+    unique_save_dir = exp_save_dir
+
+    # Increment the tracking integer until we find a unique directory name
+    while os.path.exists(unique_save_dir):
+        unique_save_dir = f"{exp_save_dir}_{tracking_int}"
+        tracking_int += 1
+    
+    arglist.save_dir = unique_save_dir
+    os.makedirs(arglist.save_dir, exist_ok=True)
 
     with U.single_threaded_session():
         env = make_env(arglist.n_envs, arglist.n_individuals, headless=not arglist.display)
@@ -161,14 +171,12 @@ def train(arglist):
                 train_step += 1
 
                 if train_step % 100 == 0:
-                    # Initialize lists to store each loss component across agents
                     q_losses, p_losses, mean_target_qs, mean_rewards, mean_target_q_nexts, std_target_qs = [], [], [], [], [], []
                     for agent in trainers:
                         agent.preupdate()
                     for agent in trainers:
                         loss = agent.update(trainers, train_step)
                         if loss is not None:
-                            # Unpack each component from the loss returned by update()
                             q_loss, p_loss, mean_target_q, mean_rew, mean_target_q_next, std_target_q = loss
                             q_losses.append(q_loss)
                             p_losses.append(p_loss)
@@ -177,7 +185,7 @@ def train(arglist):
                             mean_target_q_nexts.append(mean_target_q_next)
                             std_target_qs.append(std_target_q)
 
-                    if q_losses:  # Proceed if losses were collected
+                    if q_losses:  
                         # Calculate the mean for each loss component
                         mean_q_loss = np.mean(q_losses)
                         mean_p_loss = np.mean(p_losses)
@@ -186,7 +194,6 @@ def train(arglist):
                         mean_target_q_next = np.mean(mean_target_q_nexts)
                         std_target_q = np.mean(std_target_qs)
 
-                        # Format the output and write to the log file
                         loss_output = (
                             f"q_loss: {mean_q_loss}, p_loss: {mean_p_loss}, "
                             f"mean_target_q: {mean_target_q}, mean_reward: {mean_reward}, "
@@ -195,16 +202,13 @@ def train(arglist):
                         loss_file.write(loss_output)
                         loss_file.flush()  # Ensure it's written immediately
 
-                # Save model with unique path including the episode number
+                # Save model 
                 if terminal and (current_episode % arglist.save_rate == 0):
-                    # Define a unique save path by adding the episode number
                     episode_save_dir = os.path.join(arglist.save_dir, f"episode_{current_episode}")
                     os.makedirs(episode_save_dir, exist_ok=True)  # Create directory if it doesn't exist
-
-                    # Save the model in the new directory
                     U.save_state(episode_save_dir, saver=saver)
                     
-                    # Print information about the save
+ 
                     print("steps: {}, episodes: {}, mean episode reward: {}, time: {}".format(
                         train_step, len(episode_rewards), np.mean(episode_rewards[:-1]),
                         round(time.time() - episode_start_time, 3)
@@ -216,6 +220,7 @@ def train(arglist):
                 if len(episode_rewards) > arglist.num_episodes:
                     print("...Finished total of {} episodes.".format(len(episode_rewards)))
                     break
+
 
 
 if __name__ == "__main__":
