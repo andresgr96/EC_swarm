@@ -17,20 +17,20 @@ from hebbian_env import HebbianEnv
 def parse_args():
     parser = argparse.ArgumentParser("Reinforcement Learning experiments for multiagent environments")
     # Environment
-    parser.add_argument("--n-envs", type=int, default=20, help="number of parallel environments")
+    parser.add_argument("--n-envs", type=int, default=30, help="number of parallel environments")
     parser.add_argument("--n-individuals", type=int, default=20, help="number of unique agents per environment")
-    parser.add_argument("--max-episode-len", type=int, default=6000, help="maximum episode length")
-    parser.add_argument("--num-episodes", type=int, default=300, help="number of episodes")
+    parser.add_argument("--max-episode-len", type=int, default=1000, help="maximum episode length")
+    parser.add_argument("--num-episodes", type=int, default=1800, help="number of episodes")
     # Core training parameters
     parser.add_argument("--lr", type=float, default=1e-3, help="learning rate for Adam optimizer")
     parser.add_argument("--gamma", type=float, default=0.95, help="discount factor")
-    parser.add_argument("--batch-size", type=int, default=128, help="number of episodes to optimize at the same time")
+    parser.add_argument("--batch-size", type=int, default=30, help="number of episodes to optimize at the same time")
     parser.add_argument("--num-units", type=int, default=64, help="number of units in the MLP")
     # Checkpointing
     parser.add_argument("--exp-name", type=str, default="experiment", help="name of the experiment")
     parser.add_argument("--save-dir", type=str, default="./results/", help="directory to save model")
-    parser.add_argument("--save-rate", type=int, default=1, help="save model every this many episodes")
-    parser.add_argument("--load-dir", type=str, default="./results/exp1", help="directory to load model")
+    parser.add_argument("--save-rate", type=int, default=18, help="save model every this many episodes")
+    parser.add_argument("--load-dir", type=str, default="./results/", help="directory to load model")
     # Evaluation
     parser.add_argument("--restore", action="store_true", default=False)
     parser.add_argument("--display", action="store_true", default=False)
@@ -71,7 +71,10 @@ def train(arglist):
         tracking_int += 1
     
     arglist.save_dir = unique_save_dir
-    os.makedirs(arglist.save_dir, exist_ok=True)
+
+    if not arglist.restore:
+            os.makedirs(arglist.save_dir, exist_ok=True)
+
 
     with U.single_threaded_session():
         env = make_env(arglist.n_envs, arglist.n_individuals, headless=not arglist.display)
@@ -85,6 +88,7 @@ def train(arglist):
             print("Loading previous state...")
             U.load_state(arglist.load_dir)
 
+        episodes_per_generation = int(arglist.num_episodes / 100)
         episode_rewards = [0.0]
         agent_rewards = [[0.0] for _ in range(arglist.n_individuals)]
         saver = tf.compat.v1.train.Saver()
@@ -97,11 +101,19 @@ def train(arglist):
         losses = []
         episode_light_values = []
 
-        # Set up the file paths
-        log_dir = os.path.join(script_dir, "logs", arglist.exp_name)
-        os.makedirs(log_dir, exist_ok=True)
-        loss_file_path = os.path.join(log_dir, "mean_loss_values.txt")
-        fitness_file_path = os.path.join(log_dir, "mean_fitness_values.txt")
+        # Create a unique log directory
+        log_base_dir = os.path.join(script_dir, "logs", arglist.exp_name)
+        log_unique_dir = log_base_dir
+        log_tracking_int = 1
+
+        while os.path.exists(log_unique_dir):
+            log_unique_dir = f"{log_base_dir}_{log_tracking_int}"
+            log_tracking_int += 1
+
+        os.makedirs(log_unique_dir, exist_ok=True)
+
+        loss_file_path = os.path.join(log_unique_dir, "mean_loss_values.txt")
+        fitness_file_path = os.path.join(log_unique_dir, "mean_fitness_values.txt")
 
         with open(loss_file_path, "a") as loss_file, open(fitness_file_path, "a") as fitness_file:
             print("Starting training iterations...")
@@ -144,7 +156,7 @@ def train(arglist):
                         agent_rewards[i][-1] += rew
 
                 # Track mean light intensity during the last episode of each generation
-                if current_episode % 3 == 0:
+                if current_episode % episodes_per_generation == 0:
                     episode_light_values.extend([info["mean_light"] for info in info_n])
 
                 if done or terminal:
@@ -160,7 +172,7 @@ def train(arglist):
                     for a in agent_rewards:
                         a.append(0)
 
-                    if current_episode % 3 == 1:  # Means the previous episode was the 3rd in the generation
+                    if current_episode % episodes_per_generation == 1:  
                         mean_light_intensity = np.mean(episode_light_values)
                         fitness_file.write(f"{mean_light_intensity}\n")
                         fitness_file.flush()  
@@ -202,13 +214,12 @@ def train(arglist):
                         loss_file.write(loss_output)
                         loss_file.flush()  # Ensure it's written immediately
 
-                # Save model 
+                # Save model
                 if terminal and (current_episode % arglist.save_rate == 0):
                     episode_save_dir = os.path.join(arglist.save_dir, f"episode_{current_episode}")
                     os.makedirs(episode_save_dir, exist_ok=True)  # Create directory if it doesn't exist
                     U.save_state(episode_save_dir, saver=saver)
-                    
- 
+
                     print("steps: {}, episodes: {}, mean episode reward: {}, time: {}".format(
                         train_step, len(episode_rewards), np.mean(episode_rewards[:-1]),
                         round(time.time() - episode_start_time, 3)
