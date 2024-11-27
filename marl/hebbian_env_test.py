@@ -37,6 +37,7 @@ class HebbianEnv(gym.Env):
         self.sensor_list2 = []
         self.current_rewards = [[] for _ in range(n_envs)]
         self.current_light_values = [[] for _ in range(n_envs)]
+        self.last_light_values = [[] for _ in range(n_envs)]
         self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(9,), dtype=np.float32)
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
@@ -426,7 +427,6 @@ class HebbianEnv(gym.Env):
         return obs
 
 
-
     def calculate_rewards(self):
         rewards = []
 
@@ -442,13 +442,21 @@ class HebbianEnv(gym.Env):
                 self.sensor_list[i_env].calculate_states(positions, headings)
                 states = self.sensor_list[i_env].get_current_state()
 
-            grad_sensor_outputs = np.array([state[-1] for state in states])
-            self.current_light_values[i_env] = grad_sensor_outputs.tolist() 
-            
-            # Normalize to [0, 1] for now
-            normalized_rewards = grad_sensor_outputs / 255.0
-            self.current_rewards[i_env] = normalized_rewards.tolist()
-            rewards.append(normalized_rewards.tolist())
+            grad_sensor_outputs = np.array([state[-1] for state in states])  
+            normalized_rewards = grad_sensor_outputs / 255.0  
+
+            env_rewards = []
+            for i, light_value in enumerate(grad_sensor_outputs):  
+                if self.last_light_values[i_env] and light_value > self.last_light_values[i_env][i]:
+                    env_rewards.append(normalized_rewards[i])  
+                else:
+                    env_rewards.append(0.0)
+
+            # Update light values and rewards
+            self.current_light_values[i_env] = grad_sensor_outputs.tolist()  
+            self.last_light_values[i_env] = grad_sensor_outputs.tolist()  
+            self.current_rewards[i_env] = env_rewards
+            rewards.append(env_rewards)
 
         return rewards
 

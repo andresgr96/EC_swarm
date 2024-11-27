@@ -3,7 +3,7 @@ from hebbian_env_test import HebbianEnv
 # from hebbian_env_og import HebbianEnv
 
 # Initialize the environment
-env = HebbianEnv(n_envs=30, n_individuals=20,  headless=True)  # Set headless to False if you want to render
+env = HebbianEnv(n_envs=1, n_individuals=20,  headless=False)  # Set headless to False if you want to render
 
 # Reset the environment to get the initial observations
 obs = env.reset()
@@ -44,7 +44,7 @@ try:
             print("Reset")
         
         # Print rewards at each step
-        # print(f"Step {step + 1}: Rew = {rewards}")
+        print(f"Step {step + 1}: Rew = {rewards}")
         # print(f"Step {step + 1}: Inf = {infos}")
         # print(f"Hnadle Lenght: {len(env.robot_handles_list[0])}")
 finally:

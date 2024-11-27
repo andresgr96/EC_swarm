@@ -17,12 +17,12 @@ from hebbian_env import HebbianEnv
 def parse_args():
     parser = argparse.ArgumentParser("Reinforcement Learning experiments for multiagent environments")
     # Environment
-    parser.add_argument("--n-envs", type=int, default=30, help="number of parallel environments")
+    parser.add_argument("--n-envs", type=int, default=20, help="number of parallel environments")
     parser.add_argument("--n-individuals", type=int, default=20, help="number of unique agents per environment")
     parser.add_argument("--max-episode-len", type=int, default=1000, help="maximum episode length")
     parser.add_argument("--num-episodes", type=int, default=1800, help="number of episodes")
     # Core training parameters
-    parser.add_argument("--lr", type=float, default=1e-3, help="learning rate for Adam optimizer")
+    parser.add_argument("--lr", type=float, default=1e-4, help="learning rate for Adam optimizer")
     parser.add_argument("--gamma", type=float, default=0.95, help="discount factor")
     parser.add_argument("--batch-size", type=int, default=30, help="number of episodes to optimize at the same time")
     parser.add_argument("--num-units", type=int, default=64, help="number of units in the MLP")
